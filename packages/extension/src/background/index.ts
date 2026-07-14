@@ -1,5 +1,6 @@
 import {
   ConfigService,
+  CredentialVault,
   createChromeStorage,
   createResponse,
   IndexedDbSessionStore,
@@ -7,10 +8,13 @@ import {
   type Envelope,
 } from '@browser-agent/core'
 import { createMessageBus, runDemoStream } from './bus.js'
+import { registerAgentHandlers } from './handlers/agent.js'
+import { registerSettingsHandlers } from './handlers/settings.js'
 
 const storage = createChromeStorage()
 const config = new ConfigService(storage)
 const models = new ModelsDevService(storage)
+const vault = new CredentialVault(storage)
 const sessions = new IndexedDbSessionStore()
 const bus = createMessageBus()
 
@@ -53,6 +57,9 @@ bus
   .onPort('stream.demo', async (message: Envelope, port) => {
     await runDemoStream(bus, port, message)
   })
+
+registerSettingsHandlers(bus, { vault, models, config })
+registerAgentHandlers(bus, { config, vault })
 
 bus.listen()
 

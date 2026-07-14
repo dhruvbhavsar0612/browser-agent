@@ -59,7 +59,7 @@ bus
   })
 
 registerSettingsHandlers(bus, { vault, models, config })
-registerAgentHandlers(bus, { config, vault })
+registerAgentHandlers(bus, { config, vault, sessions })
 
 bus.listen()
 

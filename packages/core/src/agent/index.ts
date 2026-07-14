@@ -1,6 +1,7 @@
+import type { AgentConfig, AppConfig } from '../config/schema.js'
+import { DEFAULT_CONFIG } from '../config/schema.js'
 import type { PermissionRuleEntry } from '../permission/index.js'
 import { fromConfig } from '../permission/index.js'
-import { DEFAULT_CONFIG } from '../config/schema.js'
 
 export interface AgentInfo {
   name: string
@@ -10,10 +11,29 @@ export interface AgentInfo {
   prompt?: string
   steps?: number
   hidden?: boolean
+  disable?: boolean
 }
 
-export function listAgents(): AgentInfo[] {
-  return Object.entries(DEFAULT_CONFIG.agent).map(([name, cfg]) => ({
+function mergeAgentConfig(base: AgentConfig | undefined, override: AgentConfig): AgentConfig {
+  if (!base) return override
+  return {
+    ...base,
+    ...override,
+    model: override.model ?? base.model,
+    permission: override.permission ?? base.permission,
+  }
+}
+
+function resolveAgentMap(config: AppConfig): Record<string, AgentConfig> {
+  const merged: Record<string, AgentConfig> = { ...DEFAULT_CONFIG.agent }
+  for (const [name, override] of Object.entries(config.agent ?? {})) {
+    merged[name] = mergeAgentConfig(merged[name], override)
+  }
+  return merged
+}
+
+function toAgentInfo(name: string, cfg: AgentConfig): AgentInfo {
+  return {
     name,
     description: cfg.description,
     mode: cfg.mode ?? 'primary',
@@ -21,11 +41,27 @@ export function listAgents(): AgentInfo[] {
     prompt: cfg.prompt,
     steps: cfg.steps,
     hidden: cfg.hidden,
-  }))
+    disable: cfg.disable,
+  }
 }
 
-export function getAgent(name: string): AgentInfo | undefined {
-  return listAgents().find((a) => a.name === name)
+export function listAgents(config?: AppConfig): AgentInfo[] {
+  const cfg = config ?? DEFAULT_CONFIG
+  const agents = resolveAgentMap(cfg)
+  return Object.entries(agents).map(([name, agentCfg]) => toAgentInfo(name, agentCfg))
+}
+
+export function listVisibleAgents(config?: AppConfig): AgentInfo[] {
+  return listAgents(config).filter(
+    (agent) =>
+      !agent.hidden &&
+      !agent.disable &&
+      (agent.mode === 'primary' || agent.mode === 'all'),
+  )
+}
+
+export function getAgent(name: string, config?: AppConfig): AgentInfo | undefined {
+  return listAgents(config).find((agent) => agent.name === name)
 }
 
 export {
@@ -35,3 +71,16 @@ export {
   toModelMessages,
 } from './chat.js'
 export type { ChatMessage, ChatRole, ModelRef, StreamChatOptions } from './chat.js'
+export {
+  processFullStream,
+  truncateToolResultDefault,
+  DEFAULT_TOOL_RESULT_MAX_CHARS,
+} from './processor.js'
+export type {
+  DurablePart,
+  DoomLoopOptions,
+  ProcessFullStreamOptions,
+  ProcessFullStreamResult,
+} from './processor.js'
+export { runAgentLoop } from './loop.js'
+export type { AgentLoopOptions, AgentLoopResult, AgentLoopSession } from './loop.js'

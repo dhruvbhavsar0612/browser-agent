@@ -5,7 +5,7 @@ import {
   createMemoryStorage,
   createRequest,
   parseStreamEvent,
-  streamChatText,
+  runAgentLoop,
   type StreamEvent,
 } from '@browser-agent/core'
 import { createMessageBus } from '../bus.js'
@@ -15,15 +15,19 @@ vi.mock('@browser-agent/core', async (importOriginal) => {
   const mod = await importOriginal<typeof import('@browser-agent/core')>()
   return {
     ...mod,
-    streamChatText: vi.fn(async function* () {
-      yield 'Hello'
-      yield ' world'
+    getModel: vi.fn(async () => ({})),
+    runAgentLoop: vi.fn(async ({ onEvent }) => {
+      onEvent({ kind: 'text-delta', text: 'Hello' })
+      onEvent({ kind: 'text-delta', text: ' world' })
+      onEvent({ kind: 'done' })
+      return { finishReason: 'stop', stopped: false }
     }),
   }
 })
 
 describe('agent handlers', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.stubGlobal('chrome', {
       alarms: {
         create: vi.fn(),
@@ -31,9 +35,11 @@ describe('agent handlers', () => {
       },
     })
     resetAgentRunsForTests()
-    vi.mocked(streamChatText).mockImplementation(async function* () {
-      yield 'Hello'
-      yield ' world'
+    vi.mocked(runAgentLoop).mockImplementation(async ({ onEvent }) => {
+      onEvent({ kind: 'text-delta', text: 'Hello' })
+      onEvent({ kind: 'text-delta', text: ' world' })
+      onEvent({ kind: 'done' })
+      return { finishReason: 'stop', stopped: false }
     })
   })
 
@@ -80,6 +86,7 @@ describe('agent handlers', () => {
       'done',
     ])
     expect(port.postMessage).toHaveBeenCalled()
+    expect(runAgentLoop).toHaveBeenCalled()
   })
 
   it('emits error when no model is configured', async () => {
@@ -116,6 +123,7 @@ describe('agent handlers', () => {
     expect(events).toEqual([
       { kind: 'error', message: expect.stringContaining('No model selected') },
     ])
+    expect(runAgentLoop).not.toHaveBeenCalled()
   })
 
   it('aborts an active run via agent.stop', async () => {

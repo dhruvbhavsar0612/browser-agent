@@ -1,11 +1,21 @@
 import {
   CredentialVault,
   MissingApiKeyError,
+  PermissionEngine,
+  filterToolsByPermission,
+  fromConfig,
+  getAgent,
+  getModel,
+  listTools,
+  mergeRules,
   resolveModelRef,
-  streamChatText,
+  runAgentLoop,
+  toAiSdkTools,
+  toModelMessages,
   type ChatMessage,
   type ConfigService,
   type Envelope,
+  type SessionStore,
   createResponse,
 } from '@browser-agent/core'
 import { startKeepalive, stopKeepalive, type MessageBus } from '../bus.js'
@@ -13,11 +23,17 @@ import { startKeepalive, stopKeepalive, type MessageBus } from '../bus.js'
 export type AgentHandlerDeps = {
   config: ConfigService
   vault: CredentialVault
+  sessions?: SessionStore
+  permission?: PermissionEngine
 }
 
 const activeRuns = new Map<string, AbortController>()
 
+const STUB_AUTO_ALLOW = new Set(['echo', 'get_time'])
+
 export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): void {
+  const permission = deps.permission ?? new PermissionEngine()
+
   bus.on('agent.stop', (message) => {
     const payload = (message.payload ?? {}) as { id?: string }
     const runId = payload.id ?? message.id
@@ -26,10 +42,27 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
     return createResponse(message, 'agent.stop', { ok: true })
   })
 
+  bus.on('permission.reply', (message) => {
+    const payload = (message.payload ?? {}) as {
+      id?: string
+      response?: 'once' | 'always' | 'reject'
+    }
+    if (!payload.id || !payload.response) {
+      return createResponse(message, 'permission.reply', {
+        ok: false,
+        error: 'Missing permission reply id or response',
+      })
+    }
+    permission.reply({ id: payload.id, response: payload.response })
+    return createResponse(message, 'permission.reply', { ok: true })
+  })
+
   bus.onPort('agent.prompt', async (message: Envelope, port) => {
     const payload = (message.payload ?? {}) as {
       messages?: ChatMessage[]
       agent?: string
+      sessionId?: string
+      tabId?: number
     }
     const requestId = message.id
     const controller = new AbortController()
@@ -45,6 +78,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
     try {
       const appConfig = await deps.config.get()
       const agentName = payload.agent ?? 'browse'
+      const agentInfo = getAgent(agentName, appConfig)
       const modelRef = resolveModelRef(appConfig, agentName)
 
       if (!modelRef) {
@@ -66,29 +100,76 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       const credential = await deps.vault.get(modelRef.providerID)
       const providerConfig = appConfig.provider[modelRef.providerID]
 
-      const textStream = streamChatText({
-        modelRef,
-        messages,
+      const model = await getModel(modelRef.providerID, modelRef.modelID, {
         apiKey: credential?.secret,
-        getModelOptions: {
-          baseURL: providerConfig?.api,
-          headers: providerConfig?.options?.headers,
-          name: providerConfig?.name ?? modelRef.providerID,
-        },
-        abortSignal: controller.signal,
-        system: appConfig.agent[agentName]?.prompt,
+        baseURL: providerConfig?.api,
+        headers: providerConfig?.options?.headers,
+        name: providerConfig?.name ?? modelRef.providerID,
       })
 
-      for await (const text of textStream) {
-        if (controller.signal.aborted) {
-          break
-        }
-        push({ kind: 'text-delta', text })
-      }
+      const ruleset = mergeRules(
+        fromConfig(appConfig.permission),
+        agentInfo?.permission ?? [],
+      )
 
-      if (!controller.signal.aborted) {
-        push({ kind: 'done' })
-      }
+      permission.onAsk((request) => {
+        push({
+          kind: 'permission-ask',
+          requestId: request.id,
+          permission: request.permission,
+          patterns: request.patterns,
+          metadata: request.metadata,
+        })
+        if (STUB_AUTO_ALLOW.has(request.permission)) {
+          permission.reply({ id: request.id, response: 'once' })
+        }
+      })
+
+      const sessionId = payload.sessionId ?? requestId
+      const availableTools = filterToolsByPermission(listTools(), ruleset)
+      const tools = toAiSdkTools(availableTools, {
+        sessionId,
+        tabId: payload.tabId,
+        signal: controller.signal,
+        ask: (input) =>
+          permission.ask({
+            sessionID: sessionId,
+            ruleset,
+            permission: input.permission,
+            patterns: input.patterns,
+            metadata: input.metadata,
+          }),
+      })
+
+      await runAgentLoop({
+        model,
+        messages: toModelMessages(messages),
+        system: agentInfo?.prompt,
+        tools,
+        steps: agentInfo?.steps ?? 5,
+        abortSignal: controller.signal,
+        onEvent: push,
+        session:
+          payload.sessionId && deps.sessions
+            ? { store: deps.sessions, sessionId: payload.sessionId }
+            : undefined,
+        doomLoop: {
+          threshold: 3,
+          onDetect: async () => {
+            try {
+              await permission.ask({
+                sessionID: sessionId,
+                ruleset,
+                permission: 'doom_loop',
+                patterns: ['*'],
+              })
+              return 'continue'
+            } catch {
+              return 'stop'
+            }
+          },
+        },
+      })
 
       port.postMessage(createResponse(message, 'agent.prompt', { ok: true }))
     } catch (err) {

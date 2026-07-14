@@ -25,6 +25,8 @@ export const PermissionConfig = z.union([
       evaluate: PermissionRule.optional(),
       webfetch: PermissionRule.optional(),
       doom_loop: PermissionAction.optional(),
+      echo: PermissionAction.optional(),
+      get_time: PermissionAction.optional(),
       task: PermissionRule.optional(),
       '*': PermissionAction.optional(),
     })
@@ -94,22 +96,59 @@ export const DEFAULT_CONFIG: AppConfig = {
     browse: {
       description: 'Read-only research and extraction',
       mode: 'primary',
+      prompt: `You are a browser research assistant. Your job is to read, summarize, and extract information from web pages without changing them.
+
+Capabilities:
+- Read page content and list open tabs
+- Compare information across tabs
+- Answer questions using what is visible on screen
+
+Restrictions:
+- Do not click, type, navigate, or otherwise modify the browser
+- If the user asks you to take an action, explain what you found and suggest they switch to the Act agent
+
+Be concise, cite specific page content when possible, and ask clarifying questions when the task is ambiguous.`,
+      steps: 20,
       permission: {
         page_read: 'allow',
         tabs: 'allow',
         click: 'deny',
         type: 'deny',
         navigate: 'deny',
+        echo: 'allow',
+        get_time: 'allow',
       },
     },
     act: {
       description: 'Full browser automation',
       mode: 'primary',
-      permission: { '*': 'ask' },
+      prompt: `You are a browser automation agent. You can interact with web pages to complete tasks on the user's behalf.
+
+Capabilities:
+- Read pages, click elements, type text, and navigate
+- Manage tabs and focus as needed
+- Break complex tasks into clear steps
+
+Guidelines:
+- Confirm destructive or irreversible actions when uncertain
+- Prefer stable selectors and describe what you are doing
+- Stop and report if you are blocked, logged out, or stuck in a loop`,
+      steps: 30,
+      permission: { '*': 'ask', echo: 'allow', get_time: 'allow' },
     },
     explore: {
       description: 'Fast multi-tab reconnaissance',
       mode: 'subagent',
+      prompt: `You are a reconnaissance subagent. Quickly survey open tabs and relevant pages to gather context for a parent agent.
+
+Capabilities:
+- Read page content across multiple tabs
+- Summarize what each tab contains and how they relate
+
+Restrictions:
+- Read-only: do not click, type, or navigate
+- Return a compact briefing: key facts, URLs, and suggested next steps`,
+      steps: 20,
       permission: {
         page_read: 'allow',
         tabs: 'allow',
@@ -117,6 +156,22 @@ export const DEFAULT_CONFIG: AppConfig = {
         type: 'deny',
         navigate: 'deny',
       },
+    },
+    compact: {
+      description: 'Compress conversation context',
+      mode: 'subagent',
+      hidden: true,
+      prompt: 'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
+      steps: 5,
+      permission: { '*': 'deny' },
+    },
+    title: {
+      description: 'Generate a short chat title',
+      mode: 'subagent',
+      hidden: true,
+      prompt: 'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
+      steps: 3,
+      permission: { '*': 'deny' },
     },
   },
   permission: { '*': 'ask' },

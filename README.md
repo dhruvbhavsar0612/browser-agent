@@ -20,6 +20,13 @@ A BYOK browser AI agent extension — act on the web like a user, with any conne
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system design, phases, tech stack |
 | [TOOLS.md](docs/TOOLS.md) | Browser tool specification |
 | [THREAT-MODEL.md](docs/THREAT-MODEL.md) | Security model and mitigations |
+| [LINEAR.md](docs/LINEAR.md) | Sprints, issues, dependency graph |
+
+## Linear
+
+- Project: [Browser Agent Extension](https://linear.app/dhruvsprojects/project/browser-agent-extension-d4eb96c4fb46)
+- Dependency graph: [doc](https://linear.app/dhruvsprojects/document/dependency-graph-and-parallel-tracks-ecc2eb16861c)
+- **Start here:** [DHR-43 Monorepo scaffold](https://linear.app/dhruvsprojects/issue/DHR-43) (In Progress)
 
 ## Reference repos (cloned locally for study)
 

@@ -71,3 +71,14 @@ export {
   toModelMessages,
 } from './chat.js'
 export type { ChatMessage, ChatRole, ModelRef, StreamChatOptions } from './chat.js'
+export {
+  processFullStream,
+  truncateToolResultDefault,
+  DEFAULT_TOOL_RESULT_MAX_CHARS,
+} from './processor.js'
+export type {
+  DurablePart,
+  DoomLoopOptions,
+  ProcessFullStreamOptions,
+  ProcessFullStreamResult,
+} from './processor.js'

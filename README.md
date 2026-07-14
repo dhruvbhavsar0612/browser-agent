@@ -2,11 +2,19 @@
 
 A BYOK browser AI agent extension — act on the web like a user, with any connectable LLM provider.
 
+## Install (downloadable build)
+
+1. Open the latest [GitHub Release](https://github.com/dhruvbhavsar0612/browser-agent/releases)
+2. Download **`browser-agent-extension-*.zip`**
+3. Unzip it
+4. Chrome → `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the unzipped folder
+5. Open the side panel → **Settings** → add an API key and pick a model → **Chat**
+
 ## Status
 
-**Sprint 0 in progress.** Monorepo + MV3 shell scaffolding.
+**Sprint 1 demo ready** — Settings (BYOK) + streaming chat. Browser tools land in later sprints.
 
-## Quick start
+## Quick start (from source)
 
 ```bash
 pnpm install
@@ -14,7 +22,31 @@ pnpm --filter @browser-agent/extension build
 # Load packages/extension/dist in chrome://extensions (Developer mode)
 ```
 
+Pack a release zip locally:
+
+```bash
+pnpm --filter @browser-agent/extension build
+pnpm pack:extension
+# → release/browser-agent-extension-<version>.zip
+```
+
 See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
+
+## CI & releases
+
+| Workflow | Trigger | What it does |
+|----------|---------|----------------|
+| **CI** | PR + push to `main` | `typecheck` → `test` → `build` → upload extension zip artifact |
+| **Release** | Push tag `v*` (or manual dispatch) | Same checks → attach zip to a GitHub Release with install notes |
+
+Ship a downloadable build:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+That creates a Release whose assets include `browser-agent-extension-0.1.0.zip`.
 
 ## Concept
 
@@ -32,6 +64,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 | [THREAT-MODEL.md](docs/THREAT-MODEL.md) | Security model and mitigations |
 | [LINEAR.md](docs/LINEAR.md) | Sprints, issues, dependency graph |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Local setup and load-unpacked |
+| [RELEASE.md](docs/RELEASE.md) | CI, tagging, downloadable zip |
 
 ## Linear
 
@@ -42,7 +75,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 
 | Package | Role |
 |---------|------|
-| `@browser-agent/core` | Config, permission, messaging, provider/agent/session stubs |
+| `@browser-agent/core` | Config, permission, messaging, provider, agent, session |
 | `@browser-agent/extension` | MV3 Chrome extension (side panel + service worker) |
 
 ## Reference repos (cloned locally for study)

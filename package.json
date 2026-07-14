@@ -10,7 +10,9 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "pack:extension": "node scripts/pack-extension.mjs",
+    "sync:version": "node scripts/sync-version.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

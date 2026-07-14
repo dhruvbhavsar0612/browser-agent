@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create/release (e.g. v0.1.0). Leave empty to use the current ref.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            echo "No tag provided. Push a v* tag or pass workflow_dispatch input.tag."
+            exit 1
+          fi
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Tag must look like v0.1.0 (optional prerelease suffix)."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved release $TAG ($VERSION)"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync package + manifest version
+        run: node scripts/sync-version.mjs "${{ steps.version.outputs.version }}"
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build extension
+        run: pnpm --filter @browser-agent/extension build
+
+      - name: Pack downloadable zip
+        run: pnpm pack:extension --version "${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Browser Agent ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          files: |
+            release/browser-agent-extension-${{ steps.version.outputs.version }}.zip
+          body: |
+            ## Install
+
+            1. Download **`browser-agent-extension-${{ steps.version.outputs.version }}.zip`** below
+            2. Unzip it to a folder
+            3. Open Chrome → `chrome://extensions`
+            4. Enable **Developer mode**
+            5. **Load unpacked** → select the unzipped folder
+
+            ## Notes
+
+            Auto-generated change notes follow. API keys stay local (BYOK); nothing in this zip contains secrets.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

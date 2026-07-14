@@ -77,6 +77,8 @@ export class CredentialVault {
 
   async clear(): Promise<void> {
     await this.storage.removeLocal(VAULT_LOCAL_KEY)
+    await this.storage.removeLocal(VAULT_META_KEY)
+    this.keyPromise = undefined
   }
 
   private async getOrCreateKey(): Promise<CryptoKey> {

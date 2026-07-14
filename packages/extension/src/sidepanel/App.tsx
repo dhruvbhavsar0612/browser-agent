@@ -39,7 +39,7 @@ export function App() {
         <h1>Ready to build</h1>
         <p className="lede">{detail}</p>
         <p className="hint">
-          Sprint 0 shell. Add a provider key in Settings (Sprint 1) to start chatting.
+          Runtime ready: vault, providers, message bus, permissions. Settings + chat next.
         </p>
       </main>
 

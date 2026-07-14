@@ -73,7 +73,7 @@ describe('CredentialVault', () => {
     })
   })
 
-  it('clear removes all vault entries', async () => {
+  it('clear removes all vault entries and key material', async () => {
     const storage = createMemoryStorage()
     const vault = new CredentialVault(storage)
     await vault.set('openai', 'sk-a')
@@ -82,6 +82,15 @@ describe('CredentialVault', () => {
     expect(await vault.list()).toEqual([])
     expect(await vault.get('openai')).toBeUndefined()
     expect(await storage.getLocal(VAULT_LOCAL_KEY)).toBeUndefined()
+    expect(await storage.getLocal(VAULT_META_KEY)).toBeUndefined()
+
+    // After clear, a new key is minted and credentials work again
+    await vault.set('openai', 'sk-fresh')
+    expect(await vault.get('openai')).toEqual({
+      providerId: 'openai',
+      secret: 'sk-fresh',
+      type: 'api',
+    })
   })
 
   it('never writes secrets or vault blobs to sync storage', async () => {

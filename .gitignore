@@ -6,6 +6,7 @@ hermes-ext-ref/
 # Dependencies
 node_modules/
 dist/
+.turbo/
 
 # OS
 .DS_Store
@@ -19,3 +20,8 @@ Thumbs.db
 # Env
 .env
 .env.local
+
+# Extension build artifacts
+packages/extension/dist/
+*.crx
+*.pem

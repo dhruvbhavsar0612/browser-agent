@@ -4,7 +4,17 @@ A BYOK browser AI agent extension — act on the web like a user, with any conne
 
 ## Status
 
-**Planning phase.** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture plan.
+**Sprint 0 in progress.** Monorepo + MV3 shell scaffolding.
+
+## Quick start
+
+```bash
+pnpm install
+pnpm --filter @browser-agent/extension build
+# Load packages/extension/dist in chrome://extensions (Developer mode)
+```
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 
 ## Concept
 
@@ -21,12 +31,19 @@ A BYOK browser AI agent extension — act on the web like a user, with any conne
 | [TOOLS.md](docs/TOOLS.md) | Browser tool specification |
 | [THREAT-MODEL.md](docs/THREAT-MODEL.md) | Security model and mitigations |
 | [LINEAR.md](docs/LINEAR.md) | Sprints, issues, dependency graph |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Local setup and load-unpacked |
 
 ## Linear
 
 - Project: [Browser Agent Extension](https://linear.app/dhruvsprojects/project/browser-agent-extension-d4eb96c4fb46)
 - Dependency graph: [doc](https://linear.app/dhruvsprojects/document/dependency-graph-and-parallel-tracks-ecc2eb16861c)
-- **Start here:** [DHR-43 Monorepo scaffold](https://linear.app/dhruvsprojects/issue/DHR-43) (In Progress)
+
+## Packages
+
+| Package | Role |
+|---------|------|
+| `@browser-agent/core` | Config, permission, messaging, provider/agent/session stubs |
+| `@browser-agent/extension` | MV3 Chrome extension (side panel + service worker) |
 
 ## Reference repos (cloned locally for study)
 

@@ -1,0 +1,122 @@
+:root {
+  color-scheme: light;
+  --bg: #0f1419;
+  --bg-elevated: #1a222c;
+  --text: #e8eef4;
+  --muted: #8b9aab;
+  --accent: #3d9cfd;
+  --ok: #3ecf8e;
+  --err: #f07178;
+  --border: #2a3542;
+  font-family: 'Segoe UI', 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: radial-gradient(1200px 600px at 10% -10%, #1c2a3a 0%, var(--bg) 55%);
+  color: var(--text);
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  min-height: 480px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-size: 15px;
+}
+
+.status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.status-ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+
+.status-error {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 40%, var(--border));
+}
+
+.main {
+  padding: 28px 18px;
+}
+
+.main h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.lede {
+  margin: 0 0 16px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.nav {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.nav-item {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.nav-item.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.nav-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

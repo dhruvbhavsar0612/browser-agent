@@ -35,6 +35,10 @@
     "./messaging": {
       "types": "./src/messaging/index.ts",
       "default": "./src/messaging/index.ts"
+    },
+    "./vault": {
+      "types": "./src/vault/index.ts",
+      "default": "./src/vault/index.ts"
     }
   },
   "scripts": {

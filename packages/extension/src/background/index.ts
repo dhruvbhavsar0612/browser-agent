@@ -1,16 +1,18 @@
 import {
   ConfigService,
   createChromeStorage,
-  createEnvelope,
+  createResponse,
   IndexedDbSessionStore,
   ModelsDevService,
   type Envelope,
 } from '@browser-agent/core'
+import { createMessageBus, runDemoStream } from './bus.js'
 
 const storage = createChromeStorage()
 const config = new ConfigService(storage)
 const models = new ModelsDevService(storage)
 const sessions = new IndexedDbSessionStore()
+const bus = createMessageBus()
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
@@ -26,44 +28,33 @@ chrome.commands.onCommand.addListener((command) => {
   })
 })
 
-async function handleMessage(message: Envelope): Promise<Envelope> {
-  switch (message.type) {
-    case 'ping':
-      return createEnvelope('pong', { ok: true, ts: Date.now() }, message.id)
-    case 'config.get':
-      return createEnvelope('config.get', await config.get(), message.id)
-    case 'config.set':
-      return createEnvelope('config.set', await config.set((message.payload ?? {}) as never), message.id)
-    case 'session.list':
-      return createEnvelope('session.list', await sessions.listSessions(), message.id)
-    case 'session.create': {
-      const payload = (message.payload ?? {}) as { title?: string; agent?: string; model?: string }
-      const session = await sessions.createSession({
-        title: payload.title,
-        agent: payload.agent ?? 'browse',
-        model: payload.model,
-      })
-      return createEnvelope('session.create', session, message.id)
-    }
-    case 'session.get': {
-      const payload = (message.payload ?? {}) as { id: string }
-      return createEnvelope('session.get', await sessions.getTranscript(payload.id), message.id)
-    }
-    default:
-      return createEnvelope('error', { message: `Unhandled message type: ${message.type}` }, message.id)
-  }
-}
-
-chrome.runtime.onMessage.addListener((message: Envelope, _sender, sendResponse) => {
-  void handleMessage(message)
-    .then(sendResponse)
-    .catch((err: unknown) => {
-      sendResponse(
-        createEnvelope('error', { message: err instanceof Error ? err.message : String(err) }, message?.id),
-      )
+bus
+  .on('ping', (message) => createResponse(message, 'pong', { ok: true, ts: Date.now() }))
+  .on('config.get', async (message) => createResponse(message, 'config.get', await config.get()))
+  .on('config.set', async (message) =>
+    createResponse(message, 'config.set', await config.set((message.payload ?? {}) as never)),
+  )
+  .on('session.list', async (message) =>
+    createResponse(message, 'session.list', await sessions.listSessions()),
+  )
+  .on('session.create', async (message) => {
+    const payload = (message.payload ?? {}) as { title?: string; agent?: string; model?: string }
+    const session = await sessions.createSession({
+      title: payload.title,
+      agent: payload.agent ?? 'browse',
+      model: payload.model,
     })
-  return true
-})
+    return createResponse(message, 'session.create', session)
+  })
+  .on('session.get', async (message) => {
+    const payload = (message.payload ?? {}) as { id: string }
+    return createResponse(message, 'session.get', await sessions.getTranscript(payload.id))
+  })
+  .onPort('stream.demo', async (message: Envelope, port) => {
+    await runDemoStream(bus, port, message)
+  })
+
+bus.listen()
 
 // Warm models.dev cache in background (non-blocking)
 void models.listProviders().catch(() => undefined)

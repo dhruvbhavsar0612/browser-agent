@@ -84,3 +84,5 @@ export function createChromeStorage(): StorageAdapter {
 export const CONFIG_SYNC_KEY = 'browser-agent.config'
 export const MODELS_CACHE_KEY = 'browser-agent.models-dev'
 export const VAULT_LOCAL_KEY = 'browser-agent.vault'
+/** Exported AES key material for vault wrapping (local only — never sync) */
+export const VAULT_META_KEY = 'browser-agent.vault-meta'

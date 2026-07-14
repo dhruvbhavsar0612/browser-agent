@@ -1,0 +1,108 @@
+import { describe, expect, it } from 'vitest'
+import {
+  createMemoryStorage,
+  VAULT_LOCAL_KEY,
+  VAULT_META_KEY,
+} from '../config/storage.js'
+import { decryptAesGcm, encryptAesGcm, generateVaultKey, importKeyRaw } from './crypto.js'
+import { CredentialVault } from './vault.js'
+
+describe('AES-GCM crypto', () => {
+  it('round-trips plaintext', async () => {
+    const key = await generateVaultKey()
+    const encrypted = await encryptAesGcm(key, 'sk-test-secret')
+    expect(encrypted.ciphertext).not.toContain('sk-test-secret')
+    expect(encrypted.iv.length).toBeGreaterThan(0)
+    const plain = await decryptAesGcm(key, encrypted)
+    expect(plain).toBe('sk-test-secret')
+  })
+})
+
+describe('CredentialVault', () => {
+  it('encrypts on set and decrypts on get', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+
+    await vault.set('openai', 'sk-live-abc', 'api')
+    const got = await vault.get('openai')
+    expect(got).toEqual({ providerId: 'openai', secret: 'sk-live-abc', type: 'api' })
+
+    const raw = await storage.getLocal<Record<string, { ciphertext: string; iv: string }>>(
+      VAULT_LOCAL_KEY,
+    )
+    expect(raw?.openai).toBeDefined()
+    expect(JSON.stringify(raw)).not.toContain('sk-live-abc')
+
+    const meta = await storage.getLocal<string>(VAULT_META_KEY)
+    expect(meta).toBeTruthy()
+    expect(await storage.getSync(VAULT_LOCAL_KEY)).toBeUndefined()
+    expect(await storage.getSync(VAULT_META_KEY)).toBeUndefined()
+  })
+
+  it('list returns ids without leaking secrets', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-secret-1')
+    await vault.set('anthropic', 'sk-secret-2', 'api')
+    await vault.set('google', 'oauth-token', 'oauth')
+
+    const listed = await vault.list()
+    expect(listed).toEqual(
+      expect.arrayContaining([
+        { providerId: 'openai', type: 'api' },
+        { providerId: 'anthropic', type: 'api' },
+        { providerId: 'google', type: 'oauth' },
+      ]),
+    )
+    expect(listed).toHaveLength(3)
+    expect(JSON.stringify(listed)).not.toContain('sk-secret')
+    expect(JSON.stringify(listed)).not.toContain('oauth-token')
+  })
+
+  it('delete removes a single credential', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-a')
+    await vault.set('anthropic', 'sk-b')
+    await vault.delete('openai')
+    expect(await vault.get('openai')).toBeUndefined()
+    expect(await vault.get('anthropic')).toEqual({
+      providerId: 'anthropic',
+      secret: 'sk-b',
+      type: 'api',
+    })
+  })
+
+  it('clear removes all vault entries', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-a')
+    await vault.set('anthropic', 'sk-b')
+    await vault.clear()
+    expect(await vault.list()).toEqual([])
+    expect(await vault.get('openai')).toBeUndefined()
+    expect(await storage.getLocal(VAULT_LOCAL_KEY)).toBeUndefined()
+  })
+
+  it('reuses persisted key across vault instances', async () => {
+    const storage = createMemoryStorage()
+    const first = new CredentialVault(storage)
+    await first.set('openai', 'sk-persisted')
+
+    const second = new CredentialVault(storage)
+    expect(await second.get('openai')).toEqual({
+      providerId: 'openai',
+      secret: 'sk-persisted',
+      type: 'api',
+    })
+
+    const meta = await storage.getLocal<string>(VAULT_META_KEY)
+    expect(meta).toBeTruthy()
+    const key = await importKeyRaw(meta!)
+    const store = await storage.getLocal<Record<string, { ciphertext: string; iv: string }>>(
+      VAULT_LOCAL_KEY,
+    )
+    const decrypted = await decryptAesGcm(key, store!.openai!)
+    expect(decrypted).toBe('sk-persisted')
+  })
+})

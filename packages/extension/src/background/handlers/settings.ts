@@ -3,9 +3,12 @@ import {
   CredentialVault,
   ModelsDevService,
   createResponse,
+  fetchOpenAICompatibleModels,
   generateText,
   getModel,
+  mergeCompatibleProvider,
   type Envelope,
+  type ProviderInfo,
   type VaultListEntry,
 } from '@browser-agent/core'
 import type { MessageBus } from '../bus.js'
@@ -49,6 +52,47 @@ async function resolveModelOptions(
     apiKey: cred?.secret,
     baseURL: providerCfg?.api ?? options?.baseURL,
     name: providerCfg?.name ?? providerID,
+  }
+}
+
+export async function loadCompatibleModels(deps: {
+  vault: CredentialVault
+  config: ConfigService
+}): Promise<{ provider: ProviderInfo | null; error?: string }> {
+  const options = await resolveModelOptions('openai-compatible', deps.vault, deps.config)
+  const baseURL = options.baseURL?.trim()
+  if (!baseURL) {
+    return { provider: null }
+  }
+
+  try {
+    const provider = await fetchOpenAICompatibleModels({
+      baseURL,
+      apiKey: options.apiKey,
+      name: options.name ?? 'OpenAI-compatible',
+    })
+    return { provider }
+  } catch (err) {
+    return {
+      provider: null,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+export async function listMergedProviders(
+  deps: {
+    models: ModelsDevService
+    vault: CredentialVault
+    config: ConfigService
+  },
+  opts?: { forceRefresh?: boolean },
+): Promise<{ providers: ProviderInfo[]; compatibleError?: string }> {
+  const catalog = await deps.models.listProviders({ forceRefresh: opts?.forceRefresh })
+  const { provider, error } = await loadCompatibleModels(deps)
+  return {
+    providers: mergeCompatibleProvider(catalog, provider),
+    compatibleError: error,
   }
 }
 
@@ -117,8 +161,14 @@ export function registerSettingsHandlers(bus: MessageBus, deps: SettingsHandlerD
     })
     .on('models.list', async (message) => {
       const payload = (message.payload ?? {}) as { forceRefresh?: boolean }
-      const providers = await models.listProviders({ forceRefresh: payload.forceRefresh })
-      return createResponse(message, 'models.list', { providers })
+      const { providers, compatibleError } = await listMergedProviders(
+        { models, vault, config },
+        { forceRefresh: payload.forceRefresh },
+      )
+      return createResponse(message, 'models.list', {
+        providers,
+        compatibleError: compatibleError ?? null,
+      })
     })
     .on('model.test', async (message) => {
       const payload = (message.payload ?? {}) as {

@@ -30,6 +30,7 @@ function modelLabel(model: { name: string; toolCall: boolean; vision: boolean; c
 export function SettingsView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [compatibleError, setCompatibleError] = useState<string | null>(null)
   const [vaultEntries, setVaultEntries] = useState<VaultListEntry[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [config, setConfig] = useState<AppConfigType | null>(null)
@@ -38,8 +39,35 @@ export function SettingsView() {
   const [selectedModel, setSelectedModel] = useState('')
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [savingModel, setSavingModel] = useState(false)
+  const [refreshingModels, setRefreshingModels] = useState(false)
   const [testState, setTestState] = useState<TestState>('idle')
   const [testMessage, setTestMessage] = useState('')
+
+  const applyModelsResponse = useCallback((modelsRes: Awaited<ReturnType<typeof sendRequest>>) => {
+    if (modelsRes.type === 'error') {
+      throw new Error(String((modelsRes.payload as { message?: string })?.message))
+    }
+    const catalog = ((modelsRes.payload as { providers?: ProviderInfo[] })?.providers ??
+      []) as ProviderInfo[]
+    const remoteError = (modelsRes.payload as { compatibleError?: string | null })?.compatibleError
+    setProviders(catalog)
+    setCompatibleError(remoteError ? String(remoteError) : null)
+  }, [])
+
+  const refreshModels = useCallback(
+    async (opts?: { forceRefresh?: boolean }) => {
+      setRefreshingModels(true)
+      try {
+        const modelsRes = await sendRequest('models.list', {
+          forceRefresh: opts?.forceRefresh ?? true,
+        })
+        applyModelsResponse(modelsRes)
+      } finally {
+        setRefreshingModels(false)
+      }
+    },
+    [applyModelsResponse],
+  )
 
   const load = useCallback(async () => {
     setError(null)
@@ -51,15 +79,13 @@ export function SettingsView() {
       ])
 
       if (vaultRes.type === 'error') throw new Error(String((vaultRes.payload as { message?: string })?.message))
-      if (modelsRes.type === 'error') throw new Error(String((modelsRes.payload as { message?: string })?.message))
       if (configRes.type === 'error') throw new Error(String((configRes.payload as { message?: string })?.message))
 
       const entries = ((vaultRes.payload as { entries?: VaultListEntry[] })?.entries ?? []) as VaultListEntry[]
-      const catalog = ((modelsRes.payload as { providers?: ProviderInfo[] })?.providers ?? []) as ProviderInfo[]
       const cfg = configRes.payload as AppConfigType
 
+      applyModelsResponse(modelsRes)
       setVaultEntries(entries)
-      setProviders(catalog)
       setConfig(cfg)
       setSelectedModel(cfg.model ?? '')
       setBaseURL(
@@ -72,7 +98,7 @@ export function SettingsView() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [applyModelsResponse])
 
   useEffect(() => {
     void load()
@@ -86,6 +112,9 @@ export function SettingsView() {
         models: [...provider.models].sort((a, b) => a.name.localeCompare(b.name)),
       }))
   }, [providers])
+
+  const compatibleModelCount =
+    providers.find((provider) => provider.id === 'openai-compatible')?.models.length ?? 0
 
   async function saveKey(providerId: KeyProviderId) {
     const secret = keyInputs[providerId]?.trim()
@@ -101,6 +130,9 @@ export function SettingsView() {
       const entries = ((response.payload as { entries?: VaultListEntry[] })?.entries ?? []) as VaultListEntry[]
       setVaultEntries(entries)
       setKeyInputs((prev) => ({ ...prev, [providerId]: '' }))
+      if (providerId === 'openai-compatible' && baseURL.trim()) {
+        await refreshModels()
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -124,6 +156,12 @@ export function SettingsView() {
       throw new Error(String((response.payload as { message?: string })?.message))
     }
     setConfig(response.payload as AppConfigType)
+    if (trimmed) {
+      await refreshModels()
+    } else {
+      setCompatibleError(null)
+      setProviders((prev) => prev.filter((provider) => provider.id !== 'openai-compatible'))
+    }
   }
 
   async function deleteKey(providerId: string) {
@@ -225,18 +263,34 @@ export function SettingsView() {
               </div>
 
               {provider.id === 'openai-compatible' ? (
-                <div className="settings-field">
-                  <label htmlFor="base-url">Base URL</label>
-                  <input
-                    id="base-url"
-                    className="settings-input"
-                    type="url"
-                    placeholder="http://127.0.0.1:11434/v1"
-                    value={baseURL}
-                    onChange={(e) => setBaseURL(e.target.value)}
-                    onBlur={() => void saveBaseURL().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
-                  />
-                </div>
+                <>
+                  <div className="settings-field">
+                    <label htmlFor="base-url">Base URL</label>
+                    <input
+                      id="base-url"
+                      className="settings-input"
+                      type="url"
+                      placeholder="https://opencode.ai/zen/go/v1"
+                      value={baseURL}
+                      onChange={(e) => setBaseURL(e.target.value)}
+                      onBlur={() =>
+                        void saveBaseURL().catch((err) =>
+                          setError(err instanceof Error ? err.message : String(err)),
+                        )
+                      }
+                    />
+                    <p className="settings-hint">
+                      Models are loaded from <code>{'{baseURL}'}/models</code> after you save.
+                    </p>
+                  </div>
+                  {compatibleError ? <p className="settings-error">{compatibleError}</p> : null}
+                  {!compatibleError && baseURL.trim() && compatibleModelCount > 0 ? (
+                    <p className="settings-hint">
+                      Loaded {compatibleModelCount} model{compatibleModelCount === 1 ? '' : 's'} from
+                      endpoint.
+                    </p>
+                  ) : null}
+                </>
               ) : null}
 
               <div className="settings-field">
@@ -322,6 +376,18 @@ export function SettingsView() {
             onClick={() => void testModel()}
           >
             {testState === 'testing' ? 'Testing…' : 'Test model'}
+          </button>
+          <button
+            type="button"
+            className="settings-btn"
+            disabled={refreshingModels}
+            onClick={() =>
+              void refreshModels().catch((err) =>
+                setError(err instanceof Error ? err.message : String(err)),
+              )
+            }
+          >
+            {refreshingModels ? 'Refreshing…' : 'Refresh models'}
           </button>
         </div>
 

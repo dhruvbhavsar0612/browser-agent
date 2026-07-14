@@ -107,6 +107,47 @@ describe('settings handlers', () => {
     expect(providers.some((p) => p.id === 'anthropic')).toBe(true)
   })
 
+  it('merges openai-compatible /models into models.list when base URL is set', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/models')) {
+        return Response.json({
+          object: 'list',
+          data: [
+            { id: 'minimax-m3', object: 'model', owned_by: 'opencode' },
+            { id: 'glm-5', object: 'model', owned_by: 'opencode' },
+          ],
+        })
+      }
+      return Response.json(getBundledSnapshot())
+    })
+
+    await config.set({
+      provider: {
+        'openai-compatible': { api: 'https://opencode.ai/zen/go/v1' },
+      },
+    })
+    await vault.set('openai-compatible', 'sk-zen')
+
+    const res = await dispatchSettingsMessage(bus, createRequest('models.list'))
+    expect(res.type).toBe('models.list')
+    const payload = res.payload as {
+      providers: { id: string; models: { id: string }[] }[]
+      compatibleError: string | null
+    }
+    expect(payload.compatibleError).toBeNull()
+    const compatible = payload.providers.find((p) => p.id === 'openai-compatible')
+    expect(compatible?.models.map((m) => m.id).sort()).toEqual(['glm-5', 'minimax-m3'])
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://opencode.ai/zen/go/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-zen' }),
+      }),
+    )
+
+    fetchSpy.mockRestore()
+  })
+
   it('runs model.test using vault key and generateText', async () => {
     await vault.set('openai', 'sk-live')
     generateTextMock.mockResolvedValue({ text: 'pong' } as never)

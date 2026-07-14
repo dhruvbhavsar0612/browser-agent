@@ -17,3 +17,13 @@ export type {
   PermissionAction as PermissionActionType,
   McpServerConfig as McpServerConfigType,
 } from './schema.js'
+export { ConfigService } from './service.js'
+export {
+  stripSecrets,
+  createMemoryStorage,
+  createChromeStorage,
+  CONFIG_SYNC_KEY,
+  MODELS_CACHE_KEY,
+  VAULT_LOCAL_KEY,
+} from './storage.js'
+export type { StorageAdapter } from './storage.js'

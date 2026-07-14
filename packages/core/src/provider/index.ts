@@ -13,15 +13,16 @@ export interface ProviderInfo {
   models: ModelInfo[]
 }
 
-/** Placeholder — DHR-44 implements models.dev fetch/cache */
-export function listProviders(): ProviderInfo[] {
-  return []
-}
+export {
+  ModelsDevService,
+  MODELS_DEV_URL,
+  MODELS_CACHE_TTL_MS,
+  getBundledSnapshot,
+  catalogToProviders,
+} from './models-dev.js'
+export type { ModelsCatalog, ModelsCacheEntry } from './models-dev.js'
 
 /** Placeholder — DHR-47 implements AI SDK factory */
-export async function getModel(
-  _providerID: string,
-  _modelID: string,
-): Promise<never> {
+export async function getModel(_providerID: string, _modelID: string): Promise<never> {
   throw new Error('Provider factory not implemented yet (DHR-47)')
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TextStreamPart } from 'ai'
+import type { TextStreamPart, ToolSet } from 'ai'
 import type { StreamEvent } from '../messaging/index.js'
 import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
@@ -8,17 +8,15 @@ import {
   type DurablePart,
 } from './processor.js'
 
-async function* fixtureStream(
-  parts: TextStreamPart<Record<string, never>>[],
-): AsyncGenerator<TextStreamPart<Record<string, never>>> {
+async function* fixtureStream(parts: TextStreamPart<ToolSet>[]) {
   for (const part of parts) {
     yield part
   }
 }
 
 function collect(
-  parts: TextStreamPart<Record<string, never>>[],
-  opts?: Parameters<typeof processFullStream>[1],
+  parts: TextStreamPart<ToolSet>[],
+  opts?: Omit<Parameters<typeof processFullStream>[1], 'onEvent' | 'onPart'>,
 ) {
   const events: StreamEvent[] = []
   const durable: DurablePart[] = []
@@ -65,6 +63,7 @@ describe('processFullStream', () => {
         toolCallId: 'c1',
         toolName: 'echo',
         input: { text: 'hi' },
+        dynamic: true,
       },
       {
         type: 'tool-result',
@@ -72,6 +71,7 @@ describe('processFullStream', () => {
         toolName: 'echo',
         input: { text: 'hi' },
         output: { echoed: 'hi' },
+        dynamic: true,
       },
       { type: 'finish', finishReason: 'tool-calls', rawFinishReason: 'tool-calls', totalUsage: {} as never },
     ])
@@ -110,6 +110,7 @@ describe('processFullStream', () => {
         toolName: 'echo',
         input: {},
         output: big,
+        dynamic: true,
       },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
@@ -133,6 +134,7 @@ describe('processFullStream', () => {
         toolName: 'echo',
         input: {},
         error: new Error('boom'),
+        dynamic: true,
       },
       { type: 'finish', finishReason: 'error', rawFinishReason: 'error', totalUsage: {} as never },
     ])
@@ -159,6 +161,7 @@ describe('processFullStream', () => {
       toolCallId: 'c1',
       toolName: 'echo',
       input: { text: 'loop' },
+      dynamic: true as const,
     }
 
     const { events, result } = await collect(
@@ -182,6 +185,7 @@ describe('processFullStream', () => {
       toolCallId: 'c1',
       toolName: 'echo',
       input: { text: 'loop' },
+      dynamic: true as const,
     }
 
     const { result } = await collect(

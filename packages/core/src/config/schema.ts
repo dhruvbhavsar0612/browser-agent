@@ -25,6 +25,8 @@ export const PermissionConfig = z.union([
       evaluate: PermissionRule.optional(),
       webfetch: PermissionRule.optional(),
       doom_loop: PermissionAction.optional(),
+      echo: PermissionAction.optional(),
+      get_time: PermissionAction.optional(),
       task: PermissionRule.optional(),
       '*': PermissionAction.optional(),
     })
@@ -113,6 +115,8 @@ Be concise, cite specific page content when possible, and ask clarifying questio
         click: 'deny',
         type: 'deny',
         navigate: 'deny',
+        echo: 'allow',
+        get_time: 'allow',
       },
     },
     act: {
@@ -130,7 +134,7 @@ Guidelines:
 - Prefer stable selectors and describe what you are doing
 - Stop and report if you are blocked, logged out, or stuck in a loop`,
       steps: 30,
-      permission: { '*': 'ask' },
+      permission: { '*': 'ask', echo: 'allow', get_time: 'allow' },
     },
     explore: {
       description: 'Fast multi-tab reconnaissance',

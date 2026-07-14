@@ -82,3 +82,5 @@ export type {
   ProcessFullStreamOptions,
   ProcessFullStreamResult,
 } from './processor.js'
+export { runAgentLoop } from './loop.js'
+export type { AgentLoopOptions, AgentLoopResult, AgentLoopSession } from './loop.js'

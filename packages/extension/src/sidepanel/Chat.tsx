@@ -6,17 +6,44 @@ import {
   parseStreamEvent,
   type ChatMessage,
   type Envelope,
+  type StreamEvent,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import './Chat.css'
 
-type UiMessage = ChatMessage & { id: string }
+type ToolStatus = Extract<StreamEvent, { kind: 'tool-call' | 'tool-result' }>
+
+type UiMessage = ChatMessage & {
+  id: string
+  tools?: ToolStatus[]
+}
 
 function createId(): string {
   return crypto.randomUUID()
 }
 
-export function ChatView({ selectedAgent }: { selectedAgent: string }) {
+function formatToolArgs(args: unknown): string {
+  if (args == null) return ''
+  if (typeof args === 'string') return args
+  try {
+    return JSON.stringify(args)
+  } catch {
+    return String(args)
+  }
+}
+
+function formatToolResult(result: unknown): string {
+  if (result == null) return ''
+  if (typeof result === 'string') return result
+  try {
+    return JSON.stringify(result)
+  } catch {
+    return String(result)
+  }
+}
+
+export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
+  const agent = selectedAgent ?? 'browse'
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -38,6 +65,25 @@ export function ChatView({ selectedAgent }: { selectedAgent: string }) {
   useEffect(() => {
     streamingRef.current = streaming
   }, [streaming])
+
+  const appendToolEvent = useCallback((event: Extract<StreamEvent, { kind: 'tool-call' | 'tool-result' }>) => {
+    setMessages((prev) => {
+      const next = [...prev]
+      const last = next[next.length - 1]
+      if (!last || last.role !== 'assistant') {
+        next.push({
+          id: createId(),
+          role: 'assistant',
+          content: '',
+          tools: [event],
+        })
+        return next
+      }
+      const tools = [...(last.tools ?? []), event]
+      next[next.length - 1] = { ...last, tools }
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     const port = chrome.runtime.connect({ name: PORT_NAMES.STREAM })
@@ -81,6 +127,11 @@ export function ChatView({ selectedAgent }: { selectedAgent: string }) {
         return
       }
 
+      if (event.kind === 'tool-call' || event.kind === 'tool-result') {
+        appendToolEvent(event)
+        return
+      }
+
       if (event.kind === 'error') {
         setError(event.message)
         setStreaming(false)
@@ -108,7 +159,7 @@ export function ChatView({ selectedAgent }: { selectedAgent: string }) {
       port.disconnect()
       portRef.current = null
     }
-  }, [])
+  }, [appendToolEvent])
 
   const send = useCallback(() => {
     const text = input.trim()
@@ -127,7 +178,7 @@ export function ChatView({ selectedAgent }: { selectedAgent: string }) {
       { role: 'user', content: text },
     ]
 
-    const request = createRequest('agent.prompt', { messages: history, agent: selectedAgent })
+    const request = createRequest('agent.prompt', { messages: history, agent })
     activeRequestIdRef.current = request.id
 
     setMessages((prev) => [...prev, userMessage, assistantMessage])
@@ -135,7 +186,7 @@ export function ChatView({ selectedAgent }: { selectedAgent: string }) {
     setError(null)
     setStreaming(true)
     port.postMessage(request)
-  }, [input, messages, selectedAgent, streaming])
+  }, [agent, input, messages, streaming])
 
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -174,7 +225,21 @@ export function ChatView({ selectedAgent }: { selectedAgent: string }) {
                   isStreamingAssistant ? ' chat-bubble-streaming' : ''
                 }`}
               >
-                {message.content || (isStreamingAssistant ? '' : '…')}
+                {message.tools?.map((tool) =>
+                  tool.kind === 'tool-call' ? (
+                    <div key={tool.toolCallId} className="chat-tool chat-tool-call">
+                      Calling <span className="chat-tool-name">{tool.toolName}</span>
+                      {formatToolArgs(tool.args) ? (
+                        <span className="chat-tool-detail"> {formatToolArgs(tool.args)}</span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div key={`${tool.toolCallId}-result`} className="chat-tool chat-tool-result">
+                      Result: <span className="chat-tool-detail">{formatToolResult(tool.result)}</span>
+                    </div>
+                  ),
+                )}
+                {message.content || (isStreamingAssistant ? '' : message.tools?.length ? '' : '…')}
               </div>
             )
           })

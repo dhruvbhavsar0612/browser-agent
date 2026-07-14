@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { echoTool } from './stubs/echo.js'
+import { getTimeTool } from './stubs/get-time.js'
 
 export interface ToolContext {
   sessionId: string
@@ -11,20 +13,41 @@ export interface ToolContext {
   }) => Promise<void>
 }
 
-export interface ToolDefinition<T extends z.ZodType = z.ZodType> {
+export interface ToolDefinition {
+  id: string
+  description: string
+  parameters: z.ZodTypeAny
+  permission: string
+  permissionPatterns: (args: unknown) => string[]
+  execute: (args: unknown, ctx: ToolContext) => Promise<unknown>
+}
+
+export function defineTool<T extends z.ZodTypeAny>(tool: {
   id: string
   description: string
   parameters: T
   permission: string
   permissionPatterns: (args: z.infer<T>) => string[]
   execute: (args: z.infer<T>, ctx: ToolContext) => Promise<unknown>
+}): ToolDefinition {
+  return {
+    id: tool.id,
+    description: tool.description,
+    parameters: tool.parameters,
+    permission: tool.permission,
+    permissionPatterns: (args) => tool.permissionPatterns(args as z.infer<T>),
+    execute: (args, ctx) => tool.execute(args as z.infer<T>, ctx),
+  }
 }
 
-export function defineTool<T extends z.ZodType>(tool: ToolDefinition<T>): ToolDefinition<T> {
-  return tool
-}
-
-/** Placeholder registry — browser tools land in S3/S4 */
 export function listTools(): ToolDefinition[] {
-  return []
+  return [echoTool, getTimeTool]
 }
+
+export { echoTool } from './stubs/echo.js'
+export { getTimeTool } from './stubs/get-time.js'
+export {
+  filterToolsByPermission,
+  isToolAvailable,
+  toAiSdkTools,
+} from './ai-sdk.js'

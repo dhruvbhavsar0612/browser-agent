@@ -1,0 +1,21 @@
+# Reference clones (local study only)
+opencode-ref/
+hermes-ref/
+hermes-ext-ref/
+
+# Dependencies
+node_modules/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Env
+.env
+.env.local

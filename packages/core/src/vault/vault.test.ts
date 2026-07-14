@@ -84,6 +84,20 @@ describe('CredentialVault', () => {
     expect(await storage.getLocal(VAULT_LOCAL_KEY)).toBeUndefined()
   })
 
+  it('never writes secrets or vault blobs to sync storage', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    await storage.setSync('browser-agent.config', { executionMode: 'ask' })
+    await vault.set('openai', 'sk-must-not-sync')
+    await vault.set('anthropic', 'sk-also-local', 'oauth')
+
+    expect(await storage.getSync(VAULT_LOCAL_KEY)).toBeUndefined()
+    expect(await storage.getSync(VAULT_META_KEY)).toBeUndefined()
+    expect(JSON.stringify(await storage.getSync('browser-agent.config'))).not.toContain('sk-')
+    expect(await storage.getLocal(VAULT_LOCAL_KEY)).toBeDefined()
+    expect(await storage.getLocal(VAULT_META_KEY)).toBeDefined()
+  })
+
   it('reuses persisted key across vault instances', async () => {
     const storage = createMemoryStorage()
     const first = new CredentialVault(storage)

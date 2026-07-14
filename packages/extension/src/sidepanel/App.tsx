@@ -1,27 +1,23 @@
 import { useEffect, useState } from 'react'
 import { sendRequest } from './client.js'
+import { ChatView } from './Chat.js'
+import { SettingsView } from './Settings.js'
+
+type View = 'chat' | 'settings'
 
 export function App() {
+  const [view, setView] = useState<View>('chat')
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking')
-  const [detail, setDetail] = useState('Connecting to service worker…')
 
   useEffect(() => {
     let cancelled = false
     void sendRequest('ping')
       .then((response) => {
         if (cancelled) return
-        if (response.type === 'pong') {
-          setStatus('ok')
-          setDetail('Service worker connected')
-          return
-        }
-        setStatus('error')
-        setDetail(`Unexpected response: ${response.type}`)
+        setStatus(response.type === 'pong' ? 'ok' : 'error')
       })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setStatus('error')
-        setDetail(err instanceof Error ? err.message : String(err))
+      .catch(() => {
+        if (!cancelled) setStatus('error')
       })
     return () => {
       cancelled = true
@@ -35,19 +31,21 @@ export function App() {
         <div className={`status status-${status}`}>{status}</div>
       </header>
 
-      <main className="main">
-        <h1>Ready to build</h1>
-        <p className="lede">{detail}</p>
-        <p className="hint">
-          Runtime ready: vault, providers, message bus, permissions. Settings + chat next.
-        </p>
-      </main>
+      <main className="main main-fill">{view === 'chat' ? <ChatView /> : <SettingsView />}</main>
 
       <nav className="nav">
-        <button type="button" className="nav-item active">
+        <button
+          type="button"
+          className={`nav-item ${view === 'chat' ? 'active' : ''}`}
+          onClick={() => setView('chat')}
+        >
           Chat
         </button>
-        <button type="button" className="nav-item" disabled>
+        <button
+          type="button"
+          className={`nav-item ${view === 'settings' ? 'active' : ''}`}
+          onClick={() => setView('settings')}
+        >
           Settings
         </button>
       </nav>

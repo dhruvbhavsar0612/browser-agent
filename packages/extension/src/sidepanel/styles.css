@@ -71,6 +71,16 @@ body,
   padding: 28px 18px;
 }
 
+.main-fill {
+  padding: 0;
+  overflow: auto;
+  min-height: 0;
+}
+
+.panel-placeholder {
+  padding: 28px 18px;
+}
+
 .main h1 {
   margin: 0 0 8px;
   font-size: 22px;

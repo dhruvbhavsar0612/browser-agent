@@ -25,6 +25,17 @@ describe('provider factory', () => {
     expect(model).toHaveProperty('provider', 'openai-compatible.chat')
   })
 
+  it('avoids dynamic import() so Vite preload cannot touch document in SW', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { dirname, join } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'factory.ts'), 'utf8')
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    expect(codeOnly).not.toMatch(/await\s+import\s*\(/)
+  })
+
   it('resolves custom provider via openai-compatible + baseURL', async () => {
     const model = await getModel('my-vllm', 'qwen-32b', {
       baseURL: 'http://127.0.0.1:8000/v1',

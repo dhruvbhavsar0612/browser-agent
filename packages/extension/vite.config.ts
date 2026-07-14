@@ -6,6 +6,8 @@ import manifest from './manifest.config'
 export default defineConfig({
   plugins: [react(), crx({ manifest })],
   build: {
+    // Service workers have no `document`; Vite's modulepreload polyfill must stay off.
+    modulePreload: { polyfill: false },
     rollupOptions: {
       preserveEntrySignatures: 'exports-only',
     },

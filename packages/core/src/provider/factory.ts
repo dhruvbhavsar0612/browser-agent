@@ -1,3 +1,8 @@
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createOpenAI } from '@ai-sdk/openai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 
 export type GetModelOptions = {
@@ -13,7 +18,7 @@ type ProviderSDK = {
   chat?(modelId: string): LanguageModel
 }
 
-type BundledProviderLoader = (opts: GetModelOptions) => Promise<ProviderSDK>
+type BundledProviderLoader = (opts: GetModelOptions) => ProviderSDK
 
 /** Local / self-hosted providers that commonly omit API keys */
 const KEY_OPTIONAL_PROVIDERS = new Set([
@@ -65,52 +70,46 @@ export class MissingBaseURLError extends Error {
 }
 
 /**
- * Lazy, browser-safe provider loaders keyed by provider ID.
- * Dynamic imports keep unused providers out of the initial extension bundle when tree-shaken.
+ * Bundled provider factories.
+ *
+ * IMPORTANT: use static imports (not `await import()`). Vite's dynamic-import
+ * preload helper calls `document.getElementsByTagName`, which throws
+ * "document is not defined" inside Chrome MV3 service workers.
  */
 export const BUNDLED_PROVIDERS: Record<string, BundledProviderLoader> = {
-  anthropic: async (opts) => {
-    const { createAnthropic } = await import('@ai-sdk/anthropic')
-    return createAnthropic({
+  anthropic: (opts) =>
+    createAnthropic({
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       headers: opts.headers,
-    })
-  },
+    }),
 
-  openai: async (opts) => {
-    const { createOpenAI } = await import('@ai-sdk/openai')
-    return createOpenAI({
+  openai: (opts) =>
+    createOpenAI({
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       headers: opts.headers,
-    })
-  },
+    }),
 
-  google: async (opts) => {
-    const { createGoogleGenerativeAI } = await import('@ai-sdk/google')
-    return createGoogleGenerativeAI({
+  google: (opts) =>
+    createGoogleGenerativeAI({
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       headers: opts.headers,
-    })
-  },
+    }),
 
-  openrouter: async (opts) => {
-    const { createOpenRouter } = await import('@openrouter/ai-sdk-provider')
-    return createOpenRouter({
+  openrouter: (opts) =>
+    createOpenRouter({
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       headers: opts.headers,
-    })
-  },
+    }),
 
-  'openai-compatible': async (opts) => {
+  'openai-compatible': (opts) => {
     const baseURL = opts.baseURL
     if (!baseURL) {
       throw new MissingBaseURLError(opts.name ?? 'openai-compatible')
     }
-    const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
     return createOpenAICompatible({
       name: opts.name ?? 'openai-compatible',
       baseURL,
@@ -155,7 +154,7 @@ export async function getModel(
   const baseURL = options.baseURL ?? DEFAULT_BASE_URLS[providerID]
   const loader = resolveLoader(providerID, { ...options, baseURL })
 
-  const sdk = await loader({
+  const sdk = loader({
     ...options,
     baseURL,
     name: options.name ?? providerID,

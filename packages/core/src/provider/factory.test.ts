@@ -30,7 +30,10 @@ describe('provider factory', () => {
     const { dirname, join } = await import('node:path')
     const { fileURLToPath } = await import('node:url')
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'factory.ts'), 'utf8')
-    expect(src).not.toMatch(/await\s+import\s*\(/)
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    expect(codeOnly).not.toMatch(/await\s+import\s*\(/)
   })
 
   it('resolves custom provider via openai-compatible + baseURL', async () => {

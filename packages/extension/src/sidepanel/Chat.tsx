@@ -16,7 +16,7 @@ function createId(): string {
   return crypto.randomUUID()
 }
 
-export function ChatView() {
+export function ChatView({ selectedAgent }: { selectedAgent: string }) {
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -127,7 +127,7 @@ export function ChatView() {
       { role: 'user', content: text },
     ]
 
-    const request = createRequest('agent.prompt', { messages: history, agent: 'browse' })
+    const request = createRequest('agent.prompt', { messages: history, agent: selectedAgent })
     activeRequestIdRef.current = request.id
 
     setMessages((prev) => [...prev, userMessage, assistantMessage])
@@ -135,7 +135,7 @@ export function ChatView() {
     setError(null)
     setStreaming(true)
     port.postMessage(request)
-  }, [input, messages, streaming])
+  }, [input, messages, selectedAgent, streaming])
 
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current

@@ -30,3 +30,11 @@ export {
   UnknownProviderError,
 } from './factory.js'
 export type { GetModelOptions } from './factory.js'
+
+export {
+  fetchOpenAICompatibleModels,
+  mergeCompatibleProvider,
+  modelsEndpointUrl,
+  toOpenAICompatibleProvider,
+} from './openai-compatible-models.js'
+export type { FetchOpenAICompatibleModelsOptions } from './openai-compatible-models.js'

@@ -29,6 +29,8 @@ export default defineManifest({
     default_path: 'src/sidepanel/index.html',
   },
   permissions: ['sidePanel', 'storage', 'activeTab', 'scripting', 'tabs', 'alarms'],
+  // Needed so the service worker can call BYOK provider APIs and GET {baseURL}/models
+  host_permissions: ['https://*/*', 'http://*/*'],
   commands: {
     'toggle-side-panel': {
       suggested_key: {

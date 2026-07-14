@@ -23,5 +23,6 @@ Thumbs.db
 
 # Extension build artifacts
 packages/extension/dist/
+release/
 *.crx
 *.pem

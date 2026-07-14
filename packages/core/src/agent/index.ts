@@ -27,3 +27,11 @@ export function listAgents(): AgentInfo[] {
 export function getAgent(name: string): AgentInfo | undefined {
   return listAgents().find((a) => a.name === name)
 }
+
+export {
+  parseModelRef,
+  resolveModelRef,
+  streamChatText,
+  toModelMessages,
+} from './chat.js'
+export type { ChatMessage, ChatRole, ModelRef, StreamChatOptions } from './chat.js'

@@ -22,7 +22,11 @@ export {
 } from './models-dev.js'
 export type { ModelsCatalog, ModelsCacheEntry } from './models-dev.js'
 
-/** Placeholder — DHR-47 implements AI SDK factory */
-export async function getModel(_providerID: string, _modelID: string): Promise<never> {
-  throw new Error('Provider factory not implemented yet (DHR-47)')
-}
+export {
+  BUNDLED_PROVIDERS,
+  getModel,
+  MissingApiKeyError,
+  MissingBaseURLError,
+  UnknownProviderError,
+} from './factory.js'
+export type { GetModelOptions } from './factory.js'

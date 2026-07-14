@@ -1,26 +1,31 @@
 import { useEffect, useState } from 'react'
-import { createEnvelope, type Envelope } from '@browser-agent/core'
+import { sendRequest } from './client.js'
 
 export function App() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking')
   const [detail, setDetail] = useState('Connecting to service worker…')
 
   useEffect(() => {
-    const msg = createEnvelope('ping')
-    chrome.runtime.sendMessage(msg, (response: Envelope | undefined) => {
-      if (chrome.runtime.lastError) {
+    let cancelled = false
+    void sendRequest('ping')
+      .then((response) => {
+        if (cancelled) return
+        if (response.type === 'pong') {
+          setStatus('ok')
+          setDetail('Service worker connected')
+          return
+        }
         setStatus('error')
-        setDetail(chrome.runtime.lastError.message ?? 'Unknown error')
-        return
-      }
-      if (response?.type === 'pong') {
-        setStatus('ok')
-        setDetail('Service worker connected')
-        return
-      }
-      setStatus('error')
-      setDetail('Unexpected response')
-    })
+        setDetail(`Unexpected response: ${response.type}`)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setStatus('error')
+        setDetail(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (
@@ -34,7 +39,7 @@ export function App() {
         <h1>Ready to build</h1>
         <p className="lede">{detail}</p>
         <p className="hint">
-          Sprint 0 shell. Add a provider key in Settings (Sprint 1) to start chatting.
+          Runtime ready: vault, providers, message bus, permissions. Settings + chat next.
         </p>
       </main>
 

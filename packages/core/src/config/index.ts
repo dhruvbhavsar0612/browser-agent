@@ -25,5 +25,6 @@ export {
   CONFIG_SYNC_KEY,
   MODELS_CACHE_KEY,
   VAULT_LOCAL_KEY,
+  VAULT_META_KEY,
 } from './storage.js'
 export type { StorageAdapter } from './storage.js'

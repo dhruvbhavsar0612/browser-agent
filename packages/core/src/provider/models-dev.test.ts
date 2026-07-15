@@ -10,6 +10,9 @@ describe('models.dev', () => {
     const anthropic = providers.find((p) => p.id === 'anthropic')
     expect(anthropic?.models[0]?.toolCall).toBe(true)
     expect(anthropic?.models[0]?.vision).toBe(true)
+    const google = providers.find((p) => p.id === 'google')
+    expect(google?.name).toMatch(/AI Studio|Google/i)
+    expect(google?.models.some((m) => m.id.startsWith('gemini-'))).toBe(true)
   })
 
   it('caches network catalog and respects TTL', async () => {

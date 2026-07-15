@@ -42,6 +42,32 @@
       }
     }
   },
+  "google": {
+    "name": "Google AI Studio",
+    "models": {
+      "gemini-2.5-flash": {
+        "id": "gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash",
+        "tool_call": true,
+        "modalities": { "input": ["text", "image"] },
+        "limit": { "context": 1048576 }
+      },
+      "gemini-2.5-pro": {
+        "id": "gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "tool_call": true,
+        "modalities": { "input": ["text", "image"] },
+        "limit": { "context": 1048576 }
+      },
+      "gemini-2.0-flash": {
+        "id": "gemini-2.0-flash",
+        "name": "Gemini 2.0 Flash",
+        "tool_call": true,
+        "modalities": { "input": ["text", "image"] },
+        "limit": { "context": 1048576 }
+      }
+    }
+  },
   "ollama": {
     "name": "Ollama",
     "models": {

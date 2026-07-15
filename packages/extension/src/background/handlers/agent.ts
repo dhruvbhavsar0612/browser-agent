@@ -3,6 +3,7 @@ import {
   MissingApiKeyError,
   PermissionEngine,
   buildRunRuleset,
+  credentialSecretToApiKey,
   filterToolsByPermission,
   getAgent,
   getModel,
@@ -114,7 +115,9 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       const providerConfig = appConfig.provider[modelRef.providerID]
 
       const model = await getModel(modelRef.providerID, modelRef.modelID, {
-        apiKey: credential?.secret,
+        apiKey: credential
+          ? credentialSecretToApiKey(credential.secret, credential.type)
+          : undefined,
         baseURL: providerConfig?.api,
         headers: providerConfig?.options?.headers,
         name: providerConfig?.name ?? modelRef.providerID,

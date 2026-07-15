@@ -4,7 +4,13 @@ import {
   VAULT_LOCAL_KEY,
   VAULT_META_KEY,
 } from '../config/storage.js'
-import { decryptAesGcm, encryptAesGcm, generateVaultKey, importKeyRaw } from './crypto.js'
+import {
+  decryptAesGcm,
+  encryptAesGcm,
+  exportKeyRaw,
+  generateVaultKey,
+  importKeyRaw,
+} from './crypto.js'
 import { CredentialVault } from './vault.js'
 
 describe('AES-GCM crypto', () => {
@@ -57,6 +63,56 @@ describe('CredentialVault', () => {
     expect(listed).toHaveLength(3)
     expect(JSON.stringify(listed)).not.toContain('sk-secret')
     expect(JSON.stringify(listed)).not.toContain('oauth-token')
+  })
+
+  it('stores API key and OAuth side-by-side and prefers OAuth on get()', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-api-key', 'api')
+    await vault.set('openai', '{"accessToken":"oauth-tok"}', 'oauth')
+
+    expect(await vault.get('openai')).toEqual({
+      providerId: 'openai',
+      secret: '{"accessToken":"oauth-tok"}',
+      type: 'oauth',
+    })
+    expect(await vault.get('openai', 'api')).toEqual({
+      providerId: 'openai',
+      secret: 'sk-api-key',
+      type: 'api',
+    })
+
+    const listed = await vault.list()
+    expect(listed).toEqual(
+      expect.arrayContaining([
+        { providerId: 'openai', type: 'api' },
+        { providerId: 'openai', type: 'oauth' },
+      ]),
+    )
+
+    await vault.delete('openai', 'oauth')
+    expect(await vault.get('openai')).toEqual({
+      providerId: 'openai',
+      secret: 'sk-api-key',
+      type: 'api',
+    })
+  })
+
+  it('migrates legacy single-blob vault entries', async () => {
+    const storage = createMemoryStorage()
+    const key = await generateVaultKey()
+    const encrypted = await encryptAesGcm(key, 'sk-legacy')
+    await storage.setLocal(VAULT_META_KEY, await exportKeyRaw(key))
+    await storage.setLocal(VAULT_LOCAL_KEY, {
+      openai: { type: 'api', ciphertext: encrypted.ciphertext, iv: encrypted.iv },
+    })
+
+    const vault = new CredentialVault(storage)
+    expect(await vault.get('openai')).toEqual({
+      providerId: 'openai',
+      secret: 'sk-legacy',
+      type: 'api',
+    })
   })
 
   it('delete removes a single credential', async () => {
@@ -122,10 +178,10 @@ describe('CredentialVault', () => {
     const meta = await storage.getLocal<string>(VAULT_META_KEY)
     expect(meta).toBeTruthy()
     const key = await importKeyRaw(meta!)
-    const store = await storage.getLocal<Record<string, { ciphertext: string; iv: string }>>(
-      VAULT_LOCAL_KEY,
-    )
-    const decrypted = await decryptAesGcm(key, store!.openai!)
+    const store = await storage.getLocal<
+      Record<string, { api?: { ciphertext: string; iv: string }; oauth?: { ciphertext: string; iv: string } }>
+    >(VAULT_LOCAL_KEY)
+    const decrypted = await decryptAesGcm(key, store!.openai!.api!)
     expect(decrypted).toBe('sk-persisted')
   })
 })

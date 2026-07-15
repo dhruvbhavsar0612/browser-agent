@@ -25,13 +25,49 @@ export interface VaultListEntry {
   type: CredentialType
 }
 
-interface StoredBlob {
+interface EncryptedSecret {
+  ciphertext: string
+  iv: string
+}
+
+/** Per-provider record — API key and OAuth may both be stored */
+interface VaultProviderRecord {
+  api?: EncryptedSecret
+  oauth?: EncryptedSecret
+}
+
+/** Legacy v1 blob (single credential per provider) */
+interface LegacyStoredBlob {
   type: CredentialType
   ciphertext: string
   iv: string
 }
 
-type VaultStore = Record<string, StoredBlob>
+type VaultStore = Record<string, VaultProviderRecord | LegacyStoredBlob>
+
+function isLegacyBlob(value: unknown): value is LegacyStoredBlob {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    'ciphertext' in value &&
+    'iv' in value &&
+    !('api' in value) &&
+    !('oauth' in value)
+  )
+}
+
+function normalizeRecord(raw: unknown): VaultProviderRecord {
+  if (!raw || typeof raw !== 'object') return {}
+  if (isLegacyBlob(raw)) {
+    const type = raw.type === 'oauth' ? 'oauth' : 'api'
+    return { [type]: { ciphertext: raw.ciphertext, iv: raw.iv } }
+  }
+  const record = raw as VaultProviderRecord
+  return {
+    api: record.api,
+    oauth: record.oauth,
+  }
+}
 
 export class CredentialVault {
   private keyPromise: Promise<CryptoKey> | undefined
@@ -42,36 +78,67 @@ export class CredentialVault {
     const key = await this.getOrCreateKey()
     const encrypted = await encryptAesGcm(key, secret)
     const store = await this.readStore()
-    store[providerId] = {
-      type,
-      ciphertext: encrypted.ciphertext,
-      iv: encrypted.iv,
-    }
+    const record = normalizeRecord(store[providerId])
+    record[type] = { ciphertext: encrypted.ciphertext, iv: encrypted.iv }
+    store[providerId] = record
     await this.writeStore(store)
   }
 
-  async get(providerId: string): Promise<VaultCredential | undefined> {
+  /**
+   * Returns the preferred credential for a provider: OAuth when present, else API key.
+   * Pass `type` to fetch a specific credential.
+   */
+  async get(
+    providerId: string,
+    type?: CredentialType,
+  ): Promise<VaultCredential | undefined> {
     const store = await this.readStore()
-    const blob = store[providerId]
+    const record = normalizeRecord(store[providerId])
+    if (!record.api && !record.oauth) return undefined
+
+    const resolvedType: CredentialType =
+      type ?? (record.oauth ? 'oauth' : 'api')
+    const blob = record[resolvedType]
     if (!blob) return undefined
+
     const key = await this.getOrCreateKey()
-    const secret = await decryptAesGcm(key, { ciphertext: blob.ciphertext, iv: blob.iv })
-    return { providerId, secret, type: blob.type }
+    const secret = await decryptAesGcm(key, blob)
+    return { providerId, secret, type: resolvedType }
   }
 
-  /** Returns provider ids and types only — never secrets */
+  /** Returns provider ids and types only — never secrets. May include two entries per provider. */
   async list(): Promise<VaultListEntry[]> {
     const store = await this.readStore()
-    return Object.entries(store).map(([providerId, blob]) => ({
-      providerId,
-      type: blob.type,
-    }))
+    const entries: VaultListEntry[] = []
+    for (const [providerId, raw] of Object.entries(store)) {
+      const record = normalizeRecord(raw)
+      if (record.api) entries.push({ providerId, type: 'api' })
+      if (record.oauth) entries.push({ providerId, type: 'oauth' })
+    }
+    return entries
   }
 
-  async delete(providerId: string): Promise<void> {
+  /**
+   * Deletes credentials for a provider.
+   * When `type` is omitted, removes both API and OAuth entries.
+   */
+  async delete(providerId: string, type?: CredentialType): Promise<void> {
     const store = await this.readStore()
     if (!(providerId in store)) return
-    delete store[providerId]
+
+    if (!type) {
+      delete store[providerId]
+      await this.writeStore(store)
+      return
+    }
+
+    const record = normalizeRecord(store[providerId])
+    delete record[type]
+    if (!record.api && !record.oauth) {
+      delete store[providerId]
+    } else {
+      store[providerId] = record
+    }
     await this.writeStore(store)
   }
 

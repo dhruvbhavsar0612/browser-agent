@@ -9,6 +9,7 @@ import {
 } from '@browser-agent/core'
 import { createMessageBus, runDemoStream } from './bus.js'
 import { registerAgentHandlers } from './handlers/agent.js'
+import { registerOAuthHandlers } from './handlers/oauth.js'
 import { registerSettingsHandlers } from './handlers/settings.js'
 
 const storage = createChromeStorage()
@@ -79,6 +80,7 @@ bus
 
 registerSettingsHandlers(bus, { vault, models, config })
 registerAgentHandlers(bus, { config, vault, sessions })
+registerOAuthHandlers(bus, { vault })
 
 bus.listen()
 

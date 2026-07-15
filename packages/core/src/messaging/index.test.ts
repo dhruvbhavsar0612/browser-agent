@@ -43,6 +43,13 @@ describe('messaging envelope', () => {
     })
     expect(envelope.seq).toBe(3)
   })
+
+  it('accepts oauth message types', () => {
+    for (const type of ['oauth.connect', 'oauth.complete', 'oauth.disconnect'] as const) {
+      const envelope = createEnvelope(type, { providerId: 'openai' })
+      expect(parseEnvelope(JSON.parse(JSON.stringify(envelope))).type).toBe(type)
+    }
+  })
 })
 
 describe('stream events', () => {

@@ -117,6 +117,6 @@ git push origin v0.2.0
 
 ## Roadmap (next)
 
-1. **Sprint 4** — CDP + click / type / scroll / hover / select  
-2. **Sprint 5** — Permission ask UI + execution modes  
-3. **OAuth** — OpenAI / Claude via `chrome.identity` (DHR-75 / DHR-76)
+1. **Sprint 5** — Permission ask UI + execution modes (in progress)
+2. **OAuth** — ChatGPT / Claude via Settings Connect (DHR-75 / DHR-76)
+3. **Gemini** — Google AI Studio provider UX (DHR-84)

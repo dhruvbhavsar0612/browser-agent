@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.browser-agent.dev/marketplace/v1/connector.schema.json",
+  "title": "Browser Agent remote MCP connector manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "id",
+    "version",
+    "name",
+    "description",
+    "transport",
+    "auth",
+    "registry",
+    "capabilities",
+    "toolAnnotations",
+    "compatibility",
+    "license",
+    "maintainer",
+    "verification"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "kind": { "const": "connector" },
+    "id": {
+      "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/id"
+    },
+    "version": {
+      "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/version"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["streamableHttp"],
+      "properties": {
+        "streamableHttp": { "$ref": "#/$defs/endpoint" },
+        "legacySse": { "$ref": "#/$defs/endpoint" }
+      }
+    },
+    "auth": { "$ref": "#/$defs/auth" },
+    "registry": {
+      "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/provenance"
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tools", "resources", "prompts"],
+      "properties": {
+        "tools": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "resources": { "type": "boolean" },
+        "prompts": { "type": "boolean" }
+      }
+    },
+    "toolAnnotations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/toolAnnotation" }
+    },
+    "compatibility": {
+      "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/compatibility"
+    },
+    "license": {
+      "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/license"
+    },
+    "maintainer": {
+      "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/maintainer"
+    },
+    "verification": { "$ref": "#/$defs/verification" }
+  },
+  "$defs": {
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "required", "secret"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "secret": { "type": "boolean" }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/httpsUrl"
+        },
+        "headers": { "type": "array", "items": { "$ref": "#/$defs/header" } }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["none", "oauth2", "api-key", "bearer"] },
+        "authorizationUrl": {
+          "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/httpsUrl"
+        },
+        "tokenUrl": {
+          "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/httpsUrl"
+        },
+        "scopes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "credentialKeys": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "instructionsUrl": {
+          "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/httpsUrl"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "oauth2" } } },
+          "then": {
+            "properties": { "authorizationUrl": true },
+            "required": ["authorizationUrl"]
+          }
+        }
+      ]
+    },
+    "toolAnnotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "readOnlyHint": { "type": "boolean" },
+        "destructiveHint": { "type": "boolean" },
+        "idempotentHint": { "type": "boolean" },
+        "openWorldHint": { "type": "boolean" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checksum"],
+      "properties": {
+        "status": { "enum": ["unverified", "registry", "verified"] },
+        "checkedAt": { "type": "string", "format": "date-time" },
+        "checksum": {
+          "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/checksum"
+        },
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scheme", "bundleUrl", "identity"],
+          "properties": {
+            "scheme": { "enum": ["sigstore", "minisign"] },
+            "bundleUrl": {
+              "$ref": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json#/$defs/httpsUrl"
+            },
+            "identity": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

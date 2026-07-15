@@ -1,0 +1,43 @@
+{
+  "name": "@browser-agent/marketplace-contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./providers": {
+      "types": "./src/providers/index.ts",
+      "default": "./src/providers/index.ts"
+    }
+  },
+  "bin": {
+    "browser-agent-marketplace": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "catalog": "tsx src/cli.ts generate examples catalog.json",
+    "validate:examples": "tsx src/cli.ts validate examples"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.23.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  },
+  "files": [
+    "dist",
+    "schemas",
+    "README.md"
+  ]
+}

@@ -11,7 +11,12 @@ import { sendRequest } from './client.js'
 import { MarkdownContent } from './markdown.js'
 import { PermissionAskBanner, type PermissionAskRequest } from './PermissionAsk.js'
 import { ThinkingDisclosure } from './ThinkingDisclosure.js'
-import { ToolInspector, groupToolEvents, type ToolGroup, type ToolStreamEvent } from './ToolInspector.js'
+import {
+  ToolInspector,
+  groupToolEvents,
+  type ToolGroup,
+  type ToolStreamEvent,
+} from './ToolInspector.js'
 import { ManagedStreamConnection } from './stream-connection.js'
 import './Chat.css'
 
@@ -113,6 +118,7 @@ export function ChatView({
   const [error, setError] = useState<string | null>(null)
   const [permissionQueue, setPermissionQueue] = useState<PermissionAskRequest[]>([])
   const [permissionBusy, setPermissionBusy] = useState(false)
+  const [compactionStatus, setCompactionStatus] = useState<string | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<
     'connected' | 'disconnected' | 'reconnecting'
   >('connected')
@@ -238,6 +244,11 @@ export function ChatView({
         return
       }
 
+      if (event.kind === 'compaction') {
+        setCompactionStatus(event.message)
+        return
+      }
+
       if (event.kind === 'error') {
         setError(event.message)
         setStreaming(false)
@@ -288,6 +299,7 @@ export function ChatView({
 
     if (!sessionId) {
       setMessages([])
+      setCompactionStatus(null)
       setLoadingSession(false)
       setError(null)
       return
@@ -295,6 +307,7 @@ export function ChatView({
 
     setLoadingSession(true)
     setError(null)
+    setCompactionStatus(null)
 
     void sendRequest('session.get', { id: sessionId })
       .then((response) => {
@@ -359,10 +372,6 @@ export function ChatView({
 
     const userMessage: UiMessage = { id: createId(), role: 'user', content: text }
     const assistantMessage: UiMessage = { id: createId(), role: 'assistant', content: '' }
-    const history: ChatMessage[] = [
-      ...messages.map(({ role, content }) => ({ role, content })),
-      { role: 'user', content: text },
-    ]
 
     void (async () => {
       try {
@@ -383,7 +392,8 @@ export function ChatView({
         }
 
         const request = createRequest('agent.prompt', {
-          messages: history,
+          // Durable history is reconstructed by the background from IndexedDB.
+          messages: [{ role: 'user', content: text }] satisfies ChatMessage[],
           agent,
           sessionId: session.id,
           tabId,
@@ -393,6 +403,7 @@ export function ChatView({
         setMessages((prev) => [...prev, userMessage, assistantMessage])
         setInput('')
         setError(null)
+        setCompactionStatus(null)
         setStreaming(true)
         stream.postMessage(request)
 
@@ -408,41 +419,34 @@ export function ChatView({
         setError(err instanceof Error ? err.message : String(err))
       }
     })()
-  }, [
-    agent,
-    ensureSession,
-    input,
-    loadingSession,
-    messages,
-    onSessionsRefresh,
-    streaming,
-  ])
+  }, [agent, ensureSession, input, loadingSession, onSessionsRefresh, streaming])
 
-  const replyPermission = useCallback(async (response: PermissionReply) => {
-    const current = permissionQueue[0]
-    if (!current || permissionBusy) return
-    setPermissionBusy(true)
-    try {
-      const result = await sendRequest('permission.reply', {
-        id: current.requestId,
-        response,
-      })
-      if (result.type === 'error') {
-        setError(
-          typeof result.payload === 'object' &&
-            result.payload &&
-            'message' in result.payload
-            ? String((result.payload as { message: string }).message)
-            : 'Permission reply failed',
-        )
+  const replyPermission = useCallback(
+    async (response: PermissionReply) => {
+      const current = permissionQueue[0]
+      if (!current || permissionBusy) return
+      setPermissionBusy(true)
+      try {
+        const result = await sendRequest('permission.reply', {
+          id: current.requestId,
+          response,
+        })
+        if (result.type === 'error') {
+          setError(
+            typeof result.payload === 'object' && result.payload && 'message' in result.payload
+              ? String((result.payload as { message: string }).message)
+              : 'Permission reply failed',
+          )
+        }
+        setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setPermissionBusy(false)
       }
-      setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setPermissionBusy(false)
-    }
-  }, [permissionBusy, permissionQueue])
+    },
+    [permissionBusy, permissionQueue],
+  )
 
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -486,19 +490,13 @@ export function ChatView({
             const showThinkingLive = isStreamingAssistant && hasReasoning && !message.content
 
             return (
-              <div
-                key={message.id}
-                className={`chat-message chat-message-${message.role}`}
-              >
+              <div key={message.id} className={`chat-message chat-message-${message.role}`}>
                 {message.role === 'assistant' && message.tools?.length ? (
                   <ToolInspector tools={message.tools} />
                 ) : null}
 
                 {message.role === 'assistant' && hasReasoning ? (
-                  <ThinkingDisclosure
-                    content={message.reasoning ?? ''}
-                    isLive={showThinkingLive}
-                  />
+                  <ThinkingDisclosure content={message.reasoning ?? ''} isLive={showThinkingLive} />
                 ) : null}
 
                 {(message.content || message.role === 'user') && (
@@ -528,6 +526,12 @@ export function ChatView({
       {connectionStatus !== 'connected' ? (
         <div className="chat-connection" role="status">
           {connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Connection lost — retrying'}
+        </div>
+      ) : null}
+
+      {compactionStatus ? (
+        <div className="chat-connection" role="status">
+          {compactionStatus}
         </div>
       ) : null}
 

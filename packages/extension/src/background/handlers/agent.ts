@@ -5,17 +5,23 @@ import {
   buildRunRuleset,
   credentialSecretToApiKey,
   filterToolsByPermission,
+  generateText,
   getAgent,
   getModel,
   listTools,
+  parseModelRef,
+  prepareSessionPrompt,
   resolveModelRef,
   runAgentLoop,
   toAiSdkTools,
   toModelMessages,
   type ChatMessage,
+  type CompactionStatus,
   type ConfigService,
   type Envelope,
+  type ModelsDevService,
   type SessionStore,
+  COMPACTION_SUMMARY_SYSTEM_PROMPT,
   createResponse,
 } from '@browser-agent/core'
 import { createBrowserBridge } from '../browser/bridge.js'
@@ -31,10 +37,27 @@ export type AgentHandlerDeps = {
   config: ConfigService
   vault: CredentialVault
   sessions?: SessionStore
+  models?: ModelsDevService
   permission?: PermissionEngine
 }
 
 const activeRuns = new Map<string, AbortController>()
+
+function systemWithSummary(
+  system: string | undefined,
+  summary: string | undefined,
+): string | undefined {
+  return (
+    [
+      system,
+      summary
+        ? `Durable summary of earlier conversation turns (original transcript remains stored):\n${summary}`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join('\n\n') || undefined
+  )
+}
 
 export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): void {
   const permission = deps.permission ?? new PermissionEngine()
@@ -105,7 +128,11 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       }
 
       const messages = payload.messages ?? []
-      if (messages.length === 0) {
+      const newestUserMessage = [...messages]
+        .reverse()
+        .find((item) => item.role === 'user')
+        ?.content.trim()
+      if (!newestUserMessage) {
         push({ kind: 'error', message: 'No messages to send.' })
         port.postMessage(createResponse(message, 'agent.prompt', { ok: false }))
         return
@@ -155,7 +182,8 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       if (boundTabId != null) {
         const tab = await browserBridge.tabsGet(boundTabId)
         if (tab) {
-          systemPrompt = `${systemPrompt ?? ''}\n\nActive tab: "${tab.title}" — ${tab.url} (tabId ${tab.id})`.trim()
+          systemPrompt =
+            `${systemPrompt ?? ''}\n\nActive tab: "${tab.title}" — ${tab.url} (tabId ${tab.id})`.trim()
         }
       }
 
@@ -175,10 +203,88 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
           }),
       })
 
+      let promptMessages = toModelMessages(messages)
+      let promptSystem = systemPrompt
+      const activeModelRef = `${modelRef.providerID}/${modelRef.modelID}`
+      let discoveredContext: number | undefined
+      try {
+        discoveredContext = (await deps.models?.listModels(modelRef.providerID))?.find(
+          (item) => item.id === modelRef.modelID,
+        )?.context
+      } catch {
+        discoveredContext = undefined
+      }
+
+      const summarize = async (input: string): Promise<string> => {
+        const compactAgentPrompt =
+          getAgent('compact', appConfig)?.prompt ?? COMPACTION_SUMMARY_SYSTEM_PROMPT
+        const system = `${COMPACTION_SUMMARY_SYSTEM_PROMPT}\n\n${compactAgentPrompt}`
+        let summaryModel = model
+
+        if (appConfig.small_model) {
+          try {
+            const smallRef = parseModelRef(appConfig.small_model)
+            const smallCredential = await deps.vault.get(smallRef.providerID)
+            const smallProvider = appConfig.provider[smallRef.providerID]
+            summaryModel = await getModel(smallRef.providerID, smallRef.modelID, {
+              apiKey: smallCredential
+                ? credentialSecretToApiKey(smallCredential.secret, smallCredential.type)
+                : undefined,
+              baseURL: smallProvider?.api,
+              headers: smallProvider?.options?.headers,
+              name: smallProvider?.name ?? smallRef.providerID,
+            })
+          } catch {
+            summaryModel = model
+          }
+        }
+
+        try {
+          return (await generateText({ model: summaryModel, system, prompt: input })).text
+        } catch (error) {
+          if (summaryModel === model) throw error
+          return (await generateText({ model, system, prompt: input })).text
+        }
+      }
+
+      const reportCompaction = (status: CompactionStatus) => {
+        push({
+          kind: 'compaction',
+          status: status.status,
+          message:
+            status.status === 'started'
+              ? 'Compacting earlier conversation turns…'
+              : status.status === 'completed'
+                ? `Compacted ${status.compactedMessages} older messages.`
+                : `Compaction failed; continuing with existing context: ${status.message}`,
+          epoch: status.status === 'completed' ? status.epoch : undefined,
+        })
+      }
+
+      if (payload.sessionId) {
+        if (!deps.sessions) {
+          throw new Error('Session transcript store is unavailable.')
+        }
+        const prepared = await prepareSessionPrompt({
+          store: deps.sessions,
+          sessionId: payload.sessionId,
+          newestUserMessage,
+          discoveredContext,
+          config: appConfig.compaction,
+          system: systemPrompt,
+          sourceModel: activeModelRef,
+          summarize,
+          onCompaction: reportCompaction,
+        })
+        promptMessages = prepared.messages
+        promptSystem = systemWithSummary(systemPrompt, prepared.summary)
+        await deps.sessions.updateSession(payload.sessionId, { model: activeModelRef })
+      }
+
       await runAgentLoop({
         model,
-        messages: toModelMessages(messages),
-        system: systemPrompt,
+        messages: promptMessages,
+        system: promptSystem,
         tools,
         steps: agentInfo?.steps ?? 5,
         abortSignal: controller.signal,
@@ -186,6 +292,32 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         session:
           payload.sessionId && deps.sessions
             ? { store: deps.sessions, sessionId: payload.sessionId }
+            : undefined,
+        onContextOverflow:
+          payload.sessionId && deps.sessions
+            ? async () => {
+                push({
+                  kind: 'compaction',
+                  status: 'retrying',
+                  message: 'Context limit reached. Compacting and retrying once…',
+                })
+                const retry = await prepareSessionPrompt({
+                  store: deps.sessions!,
+                  sessionId: payload.sessionId!,
+                  discoveredContext,
+                  config: appConfig.compaction,
+                  system: systemPrompt,
+                  sourceModel: activeModelRef,
+                  force: true,
+                  summarize,
+                  onCompaction: reportCompaction,
+                })
+                if (!retry.compacted) return null
+                return {
+                  messages: retry.messages,
+                  system: systemWithSummary(systemPrompt, retry.summary),
+                }
+              }
             : undefined,
         doomLoop: {
           threshold: 3,

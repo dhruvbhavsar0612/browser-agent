@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ConfigService,
   CredentialVault,
+  MemorySessionStore,
   createMemoryStorage,
   createRequest,
   parseStreamEvent,
@@ -87,6 +88,59 @@ describe('agent handlers', () => {
     ])
     expect(port.postMessage).toHaveBeenCalled()
     expect(runAgentLoop).toHaveBeenCalled()
+  })
+
+  it('reconstructs session context from the durable transcript plus newest user message', async () => {
+    const storage = createMemoryStorage()
+    const config = new ConfigService(storage)
+    await config.set({ model: 'openai/gpt-4.1' })
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-test')
+    const sessions = new MemorySessionStore()
+    const session = await sessions.createSession({ agent: 'browse' })
+    const user = await sessions.appendMessage({ sessionId: session.id, role: 'user' })
+    await sessions.appendPart({ messageId: user.id, type: 'text', content: 'durable question' })
+    const assistant = await sessions.appendMessage({ sessionId: session.id, role: 'assistant' })
+    await sessions.appendPart({
+      messageId: assistant.id,
+      type: 'reasoning',
+      content: 'hidden thought',
+    })
+    await sessions.appendPart({
+      messageId: assistant.id,
+      type: 'text',
+      content: 'durable answer',
+    })
+    const bus = createMessageBus()
+    registerAgentHandlers(bus, { config, vault, sessions })
+    const port = { postMessage: vi.fn() } as unknown as chrome.runtime.Port
+    const handler = (bus as unknown as { portHandlers: Map<string, Function> }).portHandlers.get(
+      'agent.prompt',
+    )
+
+    await handler!(
+      createRequest('agent.prompt', {
+        sessionId: session.id,
+        messages: [
+          { role: 'user', content: 'incorrect flattened question' },
+          { role: 'assistant', content: 'incorrect flattened answer' },
+          { role: 'user', content: 'newest question' },
+        ],
+      }),
+      port,
+    )
+
+    expect(vi.mocked(runAgentLoop).mock.calls.at(-1)?.[0].messages).toEqual([
+      { role: 'user', content: 'durable question' },
+      { role: 'assistant', content: [{ type: 'text', text: 'durable answer' }] },
+      { role: 'user', content: 'newest question' },
+    ])
+    expect(JSON.stringify(vi.mocked(runAgentLoop).mock.calls.at(-1)?.[0].messages)).not.toContain(
+      'hidden thought',
+    )
+    expect(JSON.stringify(vi.mocked(runAgentLoop).mock.calls.at(-1)?.[0].messages)).not.toContain(
+      'incorrect flattened',
+    )
   })
 
   it('emits error when no model is configured', async () => {

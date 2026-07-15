@@ -108,8 +108,9 @@ body,
 .header-start {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .brand {
@@ -119,6 +120,16 @@ body,
   letter-spacing: -0.01em;
   flex-shrink: 0;
   color: var(--text);
+}
+
+@media (max-width: 380px) {
+  .brand {
+    font-size: 15px;
+  }
+
+  .agent-picker-label {
+    display: none;
+  }
 }
 
 .agent-picker {

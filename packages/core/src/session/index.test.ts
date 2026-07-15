@@ -28,4 +28,12 @@ describe('MemorySessionStore', () => {
     expect(await store.getSession(session.id)).toBeNull()
     expect(await store.getTranscript(session.id)).toEqual([])
   })
+
+  it('updates session title', async () => {
+    const store = new MemorySessionStore()
+    const session = await store.createSession({ agent: 'browse', title: 'Old' })
+    const updated = await store.updateSession(session.id, { title: 'Renamed chat' })
+    expect(updated?.title).toBe('Renamed chat')
+    expect((await store.getSession(session.id))?.title).toBe('Renamed chat')
+  })
 })

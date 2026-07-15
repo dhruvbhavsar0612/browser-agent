@@ -16,6 +16,8 @@ export const MessageType = z.enum([
   'session.list',
   'session.get',
   'session.create',
+  'session.update',
+  'session.delete',
   'vault.set',
   'vault.list',
   'vault.delete',

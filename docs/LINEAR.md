@@ -64,6 +64,8 @@
 | [DHR-79](https://linear.app/dhruvsprojects/issue/DHR-79) | Reasoning / thinking UI | 77 |
 | [DHR-80](https://linear.app/dhruvsprojects/issue/DHR-80) | Light/dark theme redesign | 77 |
 | [DHR-81](https://linear.app/dhruvsprojects/issue/DHR-81) | Collapsible tool inspector | 77 |
+| [DHR-82](https://linear.app/dhruvsprojects/issue/DHR-82) | Fix stream port disconnect | — |
+| [DHR-83](https://linear.app/dhruvsprojects/issue/DHR-83) | Session history switcher | 52 |
 
 ### Sprint 5 — Permissions
 | ID | Title | Blocked by |

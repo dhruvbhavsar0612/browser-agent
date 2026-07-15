@@ -1,0 +1,164 @@
+.session-switcher {
+  position: relative;
+  min-width: 0;
+  max-width: 160px;
+}
+
+.session-switcher-trigger {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+}
+
+.session-switcher-trigger:hover,
+.session-switcher-trigger[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+}
+
+.session-switcher-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.session-switcher-chevron {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.session-switcher-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: min(280px, calc(100vw - 28px));
+  max-height: min(340px, 55vh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow), 0 12px 28px rgba(0, 0, 0, 0.12);
+  animation: session-menu-in var(--motion-fast) var(--ease-out) both;
+}
+
+@keyframes session-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.session-switcher-new {
+  border-bottom: 1px solid var(--border);
+  font-weight: 560;
+  color: var(--accent);
+}
+
+.session-switcher-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  max-height: 280px;
+}
+
+.session-switcher-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.session-switcher-item {
+  appearance: none;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.session-switcher-item:hover,
+.session-switcher-item.active {
+  background: var(--accent-soft);
+}
+
+.session-switcher-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-switcher-item-meta {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.session-switcher-delete {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  width: 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+}
+
+.session-switcher-row:hover .session-switcher-delete,
+.session-switcher-row:focus-within .session-switcher-delete {
+  opacity: 1;
+}
+
+.session-switcher-delete:hover {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+
+.session-switcher-empty {
+  padding: 14px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}

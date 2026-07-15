@@ -50,6 +50,25 @@ bus
     })
     return createResponse(message, 'session.create', session)
   })
+  .on('session.update', async (message) => {
+    const payload = (message.payload ?? {}) as {
+      id: string
+      title?: string
+      agent?: string
+      model?: string
+    }
+    const updated = await sessions.updateSession(payload.id, {
+      title: payload.title,
+      agent: payload.agent,
+      model: payload.model,
+    })
+    return createResponse(message, 'session.update', updated)
+  })
+  .on('session.delete', async (message) => {
+    const payload = (message.payload ?? {}) as { id: string }
+    await sessions.deleteSession(payload.id)
+    return createResponse(message, 'session.delete', { ok: true })
+  })
   .on('session.get', async (message) => {
     const payload = (message.payload ?? {}) as { id: string }
     return createResponse(message, 'session.get', await sessions.getTranscript(payload.id))

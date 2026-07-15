@@ -400,6 +400,18 @@
   line-height: 1.4;
 }
 
+.chat-connection {
+  margin: 0 14px 6px;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  animation: message-fade-in var(--motion-fast) var(--ease-out) both;
+}
+
 /* ── Composer ── */
 
 .chat-composer {

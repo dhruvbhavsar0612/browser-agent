@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react'
-import { listVisibleAgents, type AgentInfo } from '@browser-agent/core'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  listVisibleAgents,
+  type AgentInfo,
+  type SessionRecord,
+} from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import { ChatView } from './Chat.js'
+import { SessionSwitcher } from './SessionSwitcher.js'
 import { SettingsView } from './Settings.js'
 import { ThemeProvider, useTheme, type ThemeMode } from './ThemeProvider.js'
 
@@ -19,6 +24,17 @@ function AppContent() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking')
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [selectedAgent, setSelectedAgent] = useState('browse')
+  const [sessions, setSessions] = useState<SessionRecord[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+
+  const refreshSessions = useCallback(() => {
+    void sendRequest('session.list')
+      .then((response) => {
+        if (response.type === 'error') return
+        setSessions((response.payload ?? []) as SessionRecord[])
+      })
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -55,11 +71,54 @@ function AppContent() {
     }
   }, [])
 
+  useEffect(() => {
+    refreshSessions()
+  }, [refreshSessions])
+
+  const activeTitle =
+    sessions.find((session) => session.id === activeSessionId)?.title ?? 'New chat'
+
+  const onNewChat = useCallback(() => {
+    setActiveSessionId(null)
+    setView('chat')
+  }, [])
+
+  const onSelectSession = useCallback((sessionId: string) => {
+    setActiveSessionId(sessionId)
+    setView('chat')
+  }, [])
+
+  const onDeleteSession = useCallback(
+    (sessionId: string) => {
+      void sendRequest('session.delete', { id: sessionId })
+        .then(() => {
+          if (activeSessionId === sessionId) {
+            setActiveSessionId(null)
+          }
+          refreshSessions()
+        })
+        .catch(() => undefined)
+    },
+    [activeSessionId, refreshSessions],
+  )
+
+  const onSessionChange = useCallback((session: SessionRecord | null) => {
+    setActiveSessionId(session?.id ?? null)
+  }, [])
+
   return (
     <div className="app">
       <header className="header">
         <div className="header-start">
           <div className="brand">Browser Agent</div>
+          <SessionSwitcher
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            activeTitle={activeTitle}
+            onSelect={onSelectSession}
+            onNewChat={onNewChat}
+            onDelete={onDeleteSession}
+          />
           {agents.length > 0 ? (
             <label className="agent-picker">
               <span className="agent-picker-label">Agent</span>
@@ -97,7 +156,17 @@ function AppContent() {
       </header>
 
       <main className="main main-fill">
-        {view === 'chat' ? <ChatView selectedAgent={selectedAgent} /> : <SettingsView />}
+        {view === 'chat' ? (
+          <ChatView
+            key={activeSessionId ?? 'new'}
+            selectedAgent={selectedAgent}
+            sessionId={activeSessionId}
+            onSessionChange={onSessionChange}
+            onSessionsRefresh={refreshSessions}
+          />
+        ) : (
+          <SettingsView />
+        )}
       </main>
 
       <nav className="nav" aria-label="Main navigation">

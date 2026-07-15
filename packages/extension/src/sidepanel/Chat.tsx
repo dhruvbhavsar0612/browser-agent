@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  PORT_NAMES,
   createRequest,
-  parseEnvelope,
-  parseStreamEvent,
   type ChatMessage,
-  type Envelope,
+  type PartRecord,
+  type SessionRecord,
   type StreamEvent,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import { MarkdownContent } from './markdown.js'
 import { ThinkingDisclosure } from './ThinkingDisclosure.js'
 import { ToolInspector, groupToolEvents, type ToolGroup, type ToolStreamEvent } from './ToolInspector.js'
+import { ManagedStreamConnection } from './stream-connection.js'
 import './Chat.css'
 
 type ToolEvent = ToolStreamEvent
@@ -22,21 +21,103 @@ type UiMessage = ChatMessage & {
   tools?: ToolGroup[]
 }
 
+type TranscriptRow = {
+  id: string
+  role: string
+  parts: PartRecord[]
+}
+
 function createId(): string {
   return crypto.randomUUID()
 }
 
-export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
+function titleFromPrompt(text: string): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim()
+  if (!cleaned) return 'New chat'
+  return cleaned.length > 48 ? `${cleaned.slice(0, 45)}…` : cleaned
+}
+
+function transcriptToMessages(rows: TranscriptRow[]): UiMessage[] {
+  const messages: UiMessage[] = []
+
+  for (const row of rows) {
+    if (row.role !== 'user' && row.role !== 'assistant') continue
+
+    let content = ''
+    let reasoning = ''
+    const toolEvents: ToolStreamEvent[] = []
+
+    for (const part of row.parts) {
+      if (part.type === 'text' && typeof part.content === 'string') {
+        content += part.content
+      } else if (part.type === 'reasoning' && typeof part.content === 'string') {
+        reasoning += part.content
+      } else if (part.type === 'tool-call') {
+        const call = part.content as {
+          toolCallId?: string
+          toolName?: string
+          args?: unknown
+        }
+        if (call.toolCallId && call.toolName) {
+          toolEvents.push({
+            kind: 'tool-call',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            args: call.args,
+          })
+        }
+      } else if (part.type === 'tool-result') {
+        const result = part.content as { toolCallId?: string; result?: unknown }
+        if (result.toolCallId) {
+          toolEvents.push({
+            kind: 'tool-result',
+            toolCallId: result.toolCallId,
+            result: result.result,
+          })
+        }
+      }
+    }
+
+    messages.push({
+      id: row.id,
+      role: row.role,
+      content,
+      reasoning: reasoning || undefined,
+      tools: toolEvents.length ? groupToolEvents(toolEvents) : undefined,
+    })
+  }
+
+  return messages
+}
+
+export type ChatViewProps = {
+  selectedAgent?: string
+  sessionId: string | null
+  onSessionChange: (session: SessionRecord | null) => void
+  onSessionsRefresh: () => void
+}
+
+export function ChatView({
+  selectedAgent,
+  sessionId,
+  onSessionChange,
+  onSessionsRefresh,
+}: ChatViewProps) {
   const agent = selectedAgent ?? 'browse'
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [loadingSession, setLoadingSession] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<
+    'connected' | 'disconnected' | 'reconnecting'
+  >('connected')
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const portRef = useRef<chrome.runtime.Port | null>(null)
+  const streamRef = useRef<ManagedStreamConnection | null>(null)
   const activeRequestIdRef = useRef<string | null>(null)
   const streamingRef = useRef(false)
+  const sessionIdRef = useRef(sessionId)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -49,6 +130,10 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
   useEffect(() => {
     streamingRef.current = streaming
   }, [streaming])
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
 
   const appendToolEvent = useCallback((event: ToolEvent) => {
     setMessages((prev) => {
@@ -87,33 +172,10 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
     })
   }, [])
 
-  useEffect(() => {
-    const port = chrome.runtime.connect({ name: PORT_NAMES.STREAM })
-    portRef.current = port
-
-    const onMessage = (raw: unknown) => {
-      let envelope: Envelope
-      try {
-        envelope = parseEnvelope(raw)
-      } catch {
-        return
-      }
-
-      if (envelope.type !== 'stream.event') {
-        return
-      }
-
+  const handleStreamEvent = useCallback(
+    (event: StreamEvent, envelopeId: string) => {
       const requestId = activeRequestIdRef.current
-      if (!requestId || envelope.id !== requestId) {
-        return
-      }
-
-      let event
-      try {
-        event = parseStreamEvent(envelope.payload)
-      } catch {
-        return
-      }
+      if (!requestId || envelopeId !== requestId) return
 
       if (event.kind === 'text-delta') {
         setMessages((prev) => {
@@ -166,34 +228,112 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
       if (event.kind === 'done') {
         setStreaming(false)
         activeRequestIdRef.current = null
+        onSessionsRefresh()
       }
+    },
+    [appendToolEvent, onSessionsRefresh],
+  )
+
+  useEffect(() => {
+    const connection = new ManagedStreamConnection({
+      onEvent: (event, envelope) => handleStreamEvent(event, envelope.id),
+      onStatus: (status) => {
+        setConnectionStatus(status)
+        if (status === 'disconnected' && streamingRef.current) {
+          setStreaming(false)
+          activeRequestIdRef.current = null
+          setError('Connection interrupted. Reconnecting… try sending again in a moment.')
+        }
+        if (status === 'connected') {
+          setError((prev) =>
+            prev?.startsWith('Connection interrupted') ||
+            prev?.startsWith('Stream connection unavailable')
+              ? null
+              : prev,
+          )
+        }
+      },
+    })
+    streamRef.current = connection
+    return () => {
+      connection.dispose()
+      streamRef.current = null
+    }
+  }, [handleStreamEvent])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!sessionId) {
+      setMessages([])
+      setLoadingSession(false)
+      setError(null)
+      return
     }
 
-    port.onMessage.addListener(onMessage)
-    port.onDisconnect.addListener(() => {
-      portRef.current = null
-      if (streamingRef.current) {
-        setStreaming(false)
-        activeRequestIdRef.current = null
-      }
-    })
+    setLoadingSession(true)
+    setError(null)
+
+    void sendRequest('session.get', { id: sessionId })
+      .then((response) => {
+        if (cancelled) return
+        if (response.type === 'error') {
+          setError(
+            typeof response.payload === 'object' &&
+              response.payload &&
+              'message' in response.payload
+              ? String((response.payload as { message: string }).message)
+              : 'Failed to load session',
+          )
+          setMessages([])
+          return
+        }
+        const rows = (response.payload ?? []) as TranscriptRow[]
+        setMessages(transcriptToMessages(rows))
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+        setMessages([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSession(false)
+      })
 
     return () => {
-      port.onMessage.removeListener(onMessage)
-      port.disconnect()
-      portRef.current = null
+      cancelled = true
     }
-  }, [appendToolEvent])
+  }, [sessionId])
+
+  const ensureSession = useCallback(
+    async (firstMessage: string): Promise<SessionRecord> => {
+      const existingId = sessionIdRef.current
+      if (existingId) {
+        const listed = await sendRequest('session.list')
+        const sessions = (listed.payload ?? []) as SessionRecord[]
+        const found = sessions.find((item) => item.id === existingId)
+        if (found) return found
+      }
+
+      const created = await sendRequest('session.create', {
+        agent,
+        title: titleFromPrompt(firstMessage),
+      })
+      if (created.type === 'error' || !created.payload) {
+        throw new Error('Could not create chat session')
+      }
+      const session = created.payload as SessionRecord
+      sessionIdRef.current = session.id
+      onSessionChange(session)
+      onSessionsRefresh()
+      return session
+    },
+    [agent, onSessionChange, onSessionsRefresh],
+  )
 
   const send = useCallback(() => {
     const text = input.trim()
-    if (!text || streaming) return
-
-    const port = portRef.current
-    if (!port) {
-      setError('Stream connection unavailable. Reload the side panel.')
-      return
-    }
+    if (!text || streaming || loadingSession) return
 
     const userMessage: UiMessage = { id: createId(), role: 'user', content: text }
     const assistantMessage: UiMessage = { id: createId(), role: 'assistant', content: '' }
@@ -203,28 +343,58 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
     ]
 
     void (async () => {
-      let tabId: number | undefined
       try {
-        const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-        tabId = active?.id
-      } catch {
-        tabId = undefined
+        const stream = streamRef.current
+        if (!stream) {
+          setError('Stream connection unavailable. Reconnecting…')
+          return
+        }
+
+        const session = await ensureSession(text)
+
+        let tabId: number | undefined
+        try {
+          const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+          tabId = active?.id
+        } catch {
+          tabId = undefined
+        }
+
+        const request = createRequest('agent.prompt', {
+          messages: history,
+          agent,
+          sessionId: session.id,
+          tabId,
+        })
+        activeRequestIdRef.current = request.id
+
+        setMessages((prev) => [...prev, userMessage, assistantMessage])
+        setInput('')
+        setError(null)
+        setStreaming(true)
+        stream.postMessage(request)
+
+        if (session.title === 'New session' || session.title === 'New chat') {
+          void sendRequest('session.update', {
+            id: session.id,
+            title: titleFromPrompt(text),
+          }).then(() => onSessionsRefresh())
+        }
+      } catch (err) {
+        setStreaming(false)
+        activeRequestIdRef.current = null
+        setError(err instanceof Error ? err.message : String(err))
       }
-
-      const request = createRequest('agent.prompt', {
-        messages: history,
-        agent,
-        tabId,
-      })
-      activeRequestIdRef.current = request.id
-
-      setMessages((prev) => [...prev, userMessage, assistantMessage])
-      setInput('')
-      setError(null)
-      setStreaming(true)
-      port.postMessage(request)
     })()
-  }, [agent, input, messages, streaming])
+  }, [
+    agent,
+    ensureSession,
+    input,
+    loadingSession,
+    messages,
+    onSessionsRefresh,
+    streaming,
+  ])
 
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -244,7 +414,11 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
   return (
     <div className="chat">
       <div className="chat-messages" aria-live="polite">
-        {messages.length === 0 ? (
+        {loadingSession ? (
+          <div className="chat-empty">
+            <p>Loading chat…</p>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="chat-empty">
             <div className="chat-empty-icon" aria-hidden="true">
               ◎
@@ -302,6 +476,12 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
         <div ref={messagesEndRef} />
       </div>
 
+      {connectionStatus !== 'connected' ? (
+        <div className="chat-connection" role="status">
+          {connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Connection lost — retrying'}
+        </div>
+      ) : null}
+
       {error ? <div className="chat-error">{error}</div> : null}
 
       <div className="chat-composer">
@@ -311,7 +491,7 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
             rows={2}
             placeholder="Message the agent…"
             value={input}
-            disabled={streaming}
+            disabled={streaming || loadingSession}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={onKeyDown}
           />
@@ -324,7 +504,7 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
               <button
                 type="button"
                 className="chat-btn chat-btn-send"
-                disabled={!input.trim()}
+                disabled={!input.trim() || loadingSession}
                 onClick={send}
               >
                 Send

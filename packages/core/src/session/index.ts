@@ -22,6 +22,15 @@ export interface PartRecord {
   type: 'text' | 'tool-call' | 'tool-result' | 'reasoning'
   content: unknown
   createdAt: number
+  /** Monotonic order within a message. Optional for pre-segmentation records. */
+  order?: number
+}
+
+function compareParts(a: PartRecord, b: PartRecord): number {
+  if (a.order !== undefined && b.order !== undefined) {
+    return a.order - b.order
+  }
+  return a.createdAt - b.createdAt
 }
 
 export interface PermissionApprovalRecord {
@@ -85,7 +94,9 @@ export interface SessionStore {
     id: string,
     patch: { title?: string; agent?: string; model?: string },
   ): Promise<SessionRecord | null>
-  appendMessage(input: Omit<MessageRecord, 'id' | 'createdAt'> & { id?: string }): Promise<MessageRecord>
+  appendMessage(
+    input: Omit<MessageRecord, 'id' | 'createdAt'> & { id?: string },
+  ): Promise<MessageRecord>
   appendPart(input: Omit<PartRecord, 'id' | 'createdAt'> & { id?: string }): Promise<PartRecord>
   listMessages(sessionId: string): Promise<MessageRecord[]>
   listParts(messageId: string): Promise<PartRecord[]>
@@ -100,7 +111,11 @@ export class IndexedDbSessionStore implements SessionStore {
     return this.dbPromise
   }
 
-  async createSession(input: { title?: string; agent: string; model?: string }): Promise<SessionRecord> {
+  async createSession(input: {
+    title?: string
+    agent: string
+    model?: string
+  }): Promise<SessionRecord> {
     const now = Date.now()
     const record: SessionRecord = {
       id: crypto.randomUUID(),
@@ -161,13 +176,16 @@ export class IndexedDbSessionStore implements SessionStore {
     return record
   }
 
-  async appendPart(input: Omit<PartRecord, 'id' | 'createdAt'> & { id?: string }): Promise<PartRecord> {
+  async appendPart(
+    input: Omit<PartRecord, 'id' | 'createdAt'> & { id?: string },
+  ): Promise<PartRecord> {
     const record: PartRecord = {
       id: input.id ?? crypto.randomUUID(),
       messageId: input.messageId,
       type: input.type,
       content: input.content,
       createdAt: Date.now(),
+      order: input.order,
     }
     await (await this.db()).put('parts', record)
     return record
@@ -180,7 +198,7 @@ export class IndexedDbSessionStore implements SessionStore {
 
   async listParts(messageId: string): Promise<PartRecord[]> {
     const parts = await (await this.db()).getAllFromIndex('parts', 'by-message', messageId)
-    return parts.sort((a, b) => a.createdAt - b.createdAt)
+    return parts.sort(compareParts)
   }
 
   async getTranscript(sessionId: string): Promise<Array<MessageRecord & { parts: PartRecord[] }>> {
@@ -219,7 +237,11 @@ export class MemorySessionStore implements SessionStore {
   private messages = new Map<string, MessageRecord>()
   private parts = new Map<string, PartRecord>()
 
-  async createSession(input: { title?: string; agent: string; model?: string }): Promise<SessionRecord> {
+  async createSession(input: {
+    title?: string
+    agent: string
+    model?: string
+  }): Promise<SessionRecord> {
     const now = Date.now()
     const record: SessionRecord = {
       id: crypto.randomUUID(),
@@ -273,13 +295,16 @@ export class MemorySessionStore implements SessionStore {
     return record
   }
 
-  async appendPart(input: Omit<PartRecord, 'id' | 'createdAt'> & { id?: string }): Promise<PartRecord> {
+  async appendPart(
+    input: Omit<PartRecord, 'id' | 'createdAt'> & { id?: string },
+  ): Promise<PartRecord> {
     const record: PartRecord = {
       id: input.id ?? crypto.randomUUID(),
       messageId: input.messageId,
       type: input.type,
       content: input.content,
       createdAt: Date.now(),
+      order: input.order,
     }
     this.parts.set(record.id, record)
     return record
@@ -292,9 +317,7 @@ export class MemorySessionStore implements SessionStore {
   }
 
   async listParts(messageId: string): Promise<PartRecord[]> {
-    return [...this.parts.values()]
-      .filter((p) => p.messageId === messageId)
-      .sort((a, b) => a.createdAt - b.createdAt)
+    return [...this.parts.values()].filter((p) => p.messageId === messageId).sort(compareParts)
   }
 
   async getTranscript(sessionId: string): Promise<Array<MessageRecord & { parts: PartRecord[] }>> {

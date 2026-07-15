@@ -46,7 +46,16 @@ describe('runAgentLoop', () => {
         messages: [{ role: 'user', content: 'Hello' }],
       }),
     )
-    expect(events).toEqual([{ kind: 'text-delta', text: 'Hi' }, { kind: 'done' }])
+    expect(events.map((event) => event.kind)).toEqual([
+      'segment-start',
+      'text-delta',
+      'segment-end',
+      'done',
+    ])
+    expect(events.find((event) => event.kind === 'text-delta')).toMatchObject({
+      text: 'Hi',
+      segmentId: expect.any(String),
+    })
     expect(result.finishReason).toBe('stop')
   })
 

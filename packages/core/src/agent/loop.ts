@@ -85,16 +85,21 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     abortSignal: options.abortSignal,
   })
 
+  let assistantPartOrder = 0
   const streamResult = await processFullStream(result.fullStream, {
     onEvent: options.onEvent,
     onPart:
       options.session && assistantMessageId
-        ? (part) =>
-            options.session!.store.appendPart({
+        ? async (part) => {
+            await options.session!.store.appendPart({
+              id: 'id' in part ? part.id : undefined,
               messageId: assistantMessageId!,
               type: part.type,
               content: part.content,
+              order: assistantPartOrder,
             })
+            assistantPartOrder += 1
+          }
         : undefined,
     doomLoop: options.doomLoop,
     abortSignal: options.abortSignal,

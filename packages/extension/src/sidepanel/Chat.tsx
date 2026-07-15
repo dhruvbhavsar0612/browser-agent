@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createRequest,
   type ChatMessage,
-  type PartRecord,
   type PermissionReply,
   type SessionRecord,
   type StreamEvent,
@@ -11,23 +10,16 @@ import { sendRequest } from './client.js'
 import { MarkdownContent } from './markdown.js'
 import { PermissionAskBanner, type PermissionAskRequest } from './PermissionAsk.js'
 import { ThinkingDisclosure } from './ThinkingDisclosure.js'
-import { ToolInspector, groupToolEvents, type ToolGroup, type ToolStreamEvent } from './ToolInspector.js'
+import { ToolInspector } from './ToolInspector.js'
 import { ManagedStreamConnection } from './stream-connection.js'
+import {
+  assistantSegmentsText,
+  reduceAssistantSegments,
+  transcriptToMessages,
+  type TranscriptRow,
+  type UiMessage,
+} from './assistant-message.js'
 import './Chat.css'
-
-type ToolEvent = ToolStreamEvent
-
-type UiMessage = ChatMessage & {
-  id: string
-  reasoning?: string
-  tools?: ToolGroup[]
-}
-
-type TranscriptRow = {
-  id: string
-  role: string
-  parts: PartRecord[]
-}
 
 function createId(): string {
   return crypto.randomUUID()
@@ -37,59 +29,6 @@ function titleFromPrompt(text: string): string {
   const cleaned = text.replace(/\s+/g, ' ').trim()
   if (!cleaned) return 'New chat'
   return cleaned.length > 48 ? `${cleaned.slice(0, 45)}…` : cleaned
-}
-
-function transcriptToMessages(rows: TranscriptRow[]): UiMessage[] {
-  const messages: UiMessage[] = []
-
-  for (const row of rows) {
-    if (row.role !== 'user' && row.role !== 'assistant') continue
-
-    let content = ''
-    let reasoning = ''
-    const toolEvents: ToolStreamEvent[] = []
-
-    for (const part of row.parts) {
-      if (part.type === 'text' && typeof part.content === 'string') {
-        content += part.content
-      } else if (part.type === 'reasoning' && typeof part.content === 'string') {
-        reasoning += part.content
-      } else if (part.type === 'tool-call') {
-        const call = part.content as {
-          toolCallId?: string
-          toolName?: string
-          args?: unknown
-        }
-        if (call.toolCallId && call.toolName) {
-          toolEvents.push({
-            kind: 'tool-call',
-            toolCallId: call.toolCallId,
-            toolName: call.toolName,
-            args: call.args,
-          })
-        }
-      } else if (part.type === 'tool-result') {
-        const result = part.content as { toolCallId?: string; result?: unknown }
-        if (result.toolCallId) {
-          toolEvents.push({
-            kind: 'tool-result',
-            toolCallId: result.toolCallId,
-            result: result.result,
-          })
-        }
-      }
-    }
-
-    messages.push({
-      id: row.id,
-      role: row.role,
-      content,
-      reasoning: reasoning || undefined,
-      tools: toolEvents.length ? groupToolEvents(toolEvents) : undefined,
-    })
-  }
-
-  return messages
 }
 
 export type ChatViewProps = {
@@ -139,39 +78,26 @@ export function ChatView({
     sessionIdRef.current = sessionId
   }, [sessionId])
 
-  const appendToolEvent = useCallback((event: ToolEvent) => {
+  const appendAssistantEvent = useCallback((event: StreamEvent) => {
     setMessages((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
       if (!last || last.role !== 'assistant') {
+        const segments = reduceAssistantSegments([], event)
         next.push({
           id: createId(),
           role: 'assistant',
-          content: '',
-          tools: groupToolEvents([event]),
+          content: assistantSegmentsText(segments),
+          segments,
         })
         return next
       }
-      const rawEvents: ToolStreamEvent[] = []
-      for (const group of last.tools ?? []) {
-        if (group.args !== undefined) {
-          rawEvents.push({
-            kind: 'tool-call',
-            toolCallId: group.toolCallId,
-            toolName: group.toolName,
-            args: group.args,
-          })
-        }
-        if (group.result !== undefined) {
-          rawEvents.push({
-            kind: 'tool-result',
-            toolCallId: group.toolCallId,
-            result: group.result,
-          })
-        }
+      const segments = reduceAssistantSegments(last.segments ?? [], event)
+      next[next.length - 1] = {
+        ...last,
+        content: assistantSegmentsText(segments),
+        segments,
       }
-      rawEvents.push(event)
-      next[next.length - 1] = { ...last, tools: groupToolEvents(rawEvents) }
       return next
     })
   }, [])
@@ -181,44 +107,17 @@ export function ChatView({
       const requestId = activeRequestIdRef.current
       if (!requestId || envelopeId !== requestId) return
 
-      if (event.kind === 'text-delta') {
-        setMessages((prev) => {
-          const next = [...prev]
-          const last = next[next.length - 1]
-          if (!last || last.role !== 'assistant') {
-            next.push({ id: createId(), role: 'assistant', content: event.text })
-            return next
-          }
-          next[next.length - 1] = { ...last, content: last.content + event.text }
-          return next
-        })
-        return
-      }
-
-      if (event.kind === 'reasoning-delta') {
-        setMessages((prev) => {
-          const next = [...prev]
-          const last = next[next.length - 1]
-          if (!last || last.role !== 'assistant') {
-            next.push({
-              id: createId(),
-              role: 'assistant',
-              content: '',
-              reasoning: event.text,
-            })
-            return next
-          }
-          next[next.length - 1] = {
-            ...last,
-            reasoning: (last.reasoning ?? '') + event.text,
-          }
-          return next
-        })
-        return
-      }
-
-      if (event.kind === 'tool-call' || event.kind === 'tool-result') {
-        appendToolEvent(event)
+      if (
+        event.kind === 'segment-start' ||
+        event.kind === 'segment-end' ||
+        event.kind === 'step-start' ||
+        event.kind === 'step-end' ||
+        event.kind === 'text-delta' ||
+        event.kind === 'reasoning-delta' ||
+        event.kind === 'tool-call' ||
+        event.kind === 'tool-result'
+      ) {
+        appendAssistantEvent(event)
         return
       }
 
@@ -239,6 +138,7 @@ export function ChatView({
       }
 
       if (event.kind === 'error') {
+        appendAssistantEvent(event)
         setError(event.message)
         setStreaming(false)
         activeRequestIdRef.current = null
@@ -247,13 +147,14 @@ export function ChatView({
       }
 
       if (event.kind === 'done') {
+        appendAssistantEvent(event)
         setStreaming(false)
         activeRequestIdRef.current = null
         setPermissionQueue([])
         onSessionsRefresh()
       }
     },
-    [appendToolEvent, onSessionsRefresh],
+    [appendAssistantEvent, onSessionsRefresh],
   )
 
   useEffect(() => {
@@ -358,7 +259,12 @@ export function ChatView({
     if (!text || streaming || loadingSession) return
 
     const userMessage: UiMessage = { id: createId(), role: 'user', content: text }
-    const assistantMessage: UiMessage = { id: createId(), role: 'assistant', content: '' }
+    const assistantMessage: UiMessage = {
+      id: createId(),
+      role: 'assistant',
+      content: '',
+      segments: [],
+    }
     const history: ChatMessage[] = [
       ...messages.map(({ role, content }) => ({ role, content })),
       { role: 'user', content: text },
@@ -408,41 +314,34 @@ export function ChatView({
         setError(err instanceof Error ? err.message : String(err))
       }
     })()
-  }, [
-    agent,
-    ensureSession,
-    input,
-    loadingSession,
-    messages,
-    onSessionsRefresh,
-    streaming,
-  ])
+  }, [agent, ensureSession, input, loadingSession, messages, onSessionsRefresh, streaming])
 
-  const replyPermission = useCallback(async (response: PermissionReply) => {
-    const current = permissionQueue[0]
-    if (!current || permissionBusy) return
-    setPermissionBusy(true)
-    try {
-      const result = await sendRequest('permission.reply', {
-        id: current.requestId,
-        response,
-      })
-      if (result.type === 'error') {
-        setError(
-          typeof result.payload === 'object' &&
-            result.payload &&
-            'message' in result.payload
-            ? String((result.payload as { message: string }).message)
-            : 'Permission reply failed',
-        )
+  const replyPermission = useCallback(
+    async (response: PermissionReply) => {
+      const current = permissionQueue[0]
+      if (!current || permissionBusy) return
+      setPermissionBusy(true)
+      try {
+        const result = await sendRequest('permission.reply', {
+          id: current.requestId,
+          response,
+        })
+        if (result.type === 'error') {
+          setError(
+            typeof result.payload === 'object' && result.payload && 'message' in result.payload
+              ? String((result.payload as { message: string }).message)
+              : 'Permission reply failed',
+          )
+        }
+        setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setPermissionBusy(false)
       }
-      setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setPermissionBusy(false)
-    }
-  }, [permissionBusy, permissionQueue])
+    },
+    [permissionBusy, permissionQueue],
+  )
 
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -482,42 +381,71 @@ export function ChatView({
           messages.map((message, index) => {
             const isStreamingAssistant =
               streaming && index === messages.length - 1 && message.role === 'assistant'
-            const hasReasoning = Boolean(message.reasoning)
-            const showThinkingLive = isStreamingAssistant && hasReasoning && !message.content
+            const segments = message.segments ?? []
+            const hasVisibleSegment = segments.some(
+              (segment) =>
+                segment.type === 'tool' ||
+                ((segment.type === 'text' || segment.type === 'reasoning') &&
+                  Boolean(segment.content)),
+            )
 
             return (
-              <div
-                key={message.id}
-                className={`chat-message chat-message-${message.role}`}
-              >
-                {message.role === 'assistant' && message.tools?.length ? (
-                  <ToolInspector tools={message.tools} />
-                ) : null}
+              <div key={message.id} className={`chat-message chat-message-${message.role}`}>
+                {message.role === 'assistant'
+                  ? segments.map((segment) => {
+                      if (segment.type === 'text') {
+                        return segment.content ? (
+                          <div
+                            key={segment.id}
+                            className={`chat-bubble chat-bubble-assistant${
+                              isStreamingAssistant && segment.status === 'streaming'
+                                ? ' chat-bubble-streaming'
+                                : ''
+                            }`}
+                          >
+                            <MarkdownContent source={segment.content} />
+                          </div>
+                        ) : null
+                      }
+                      if (segment.type === 'reasoning') {
+                        return segment.content ? (
+                          <ThinkingDisclosure
+                            key={segment.id}
+                            content={segment.content}
+                            isLive={isStreamingAssistant && segment.status === 'streaming'}
+                          />
+                        ) : null
+                      }
+                      return (
+                        <ToolInspector
+                          key={segment.id}
+                          tools={[
+                            {
+                              toolCallId: segment.toolCallId,
+                              toolName: segment.toolName,
+                              args: segment.args,
+                              result: segment.result,
+                              status: segment.status,
+                            },
+                          ]}
+                        />
+                      )
+                    })
+                  : null}
 
-                {message.role === 'assistant' && hasReasoning ? (
-                  <ThinkingDisclosure
-                    content={message.reasoning ?? ''}
-                    isLive={showThinkingLive}
-                  />
-                ) : null}
-
-                {(message.content || message.role === 'user') && (
-                  <div
-                    className={`chat-bubble chat-bubble-${message.role}${
-                      isStreamingAssistant && message.content ? ' chat-bubble-streaming' : ''
-                    }`}
-                  >
-                    {message.role === 'assistant' ? (
-                      message.content ? (
-                        <MarkdownContent source={message.content} />
-                      ) : isStreamingAssistant && !hasReasoning && !message.tools?.length ? (
-                        '…'
-                      ) : null
-                    ) : (
-                      message.content
-                    )}
+                {message.role === 'assistant' && segments.length === 0 && message.content ? (
+                  <div className="chat-bubble chat-bubble-assistant">
+                    <MarkdownContent source={message.content} />
                   </div>
-                )}
+                ) : null}
+
+                {message.role === 'user' ? (
+                  <div className="chat-bubble chat-bubble-user">{message.content}</div>
+                ) : null}
+
+                {isStreamingAssistant && !hasVisibleSegment ? (
+                  <div className="chat-bubble chat-bubble-assistant">…</div>
+                ) : null}
               </div>
             )
           })

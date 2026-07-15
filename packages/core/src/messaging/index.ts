@@ -123,6 +123,12 @@ export const StreamEvent = z.discriminatedUnion('kind', [
     patterns: z.array(z.string()),
     metadata: z.unknown().optional(),
   }),
+  z.object({
+    kind: z.literal('compaction'),
+    status: z.enum(['started', 'completed', 'failed', 'retrying']),
+    message: z.string(),
+    epoch: z.number().int().positive().optional(),
+  }),
   z.object({ kind: z.literal('error'), message: z.string() }),
   z.object({ kind: z.literal('done') }),
 ])

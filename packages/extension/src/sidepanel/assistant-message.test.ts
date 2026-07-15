@@ -99,6 +99,19 @@ describe('reduceAssistantSegments', () => {
       result: { ok: true },
     })
   })
+
+  it('treats compaction events as status metadata, not assistant content', () => {
+    const before = reduce([{ kind: 'text-delta', segmentId: 'text-1', text: 'Answer' }])
+    const after = reduceAssistantSegments(before, {
+      kind: 'compaction',
+      status: 'completed',
+      message: 'Compacted older turns.',
+      epoch: 2,
+    })
+
+    expect(after).toEqual(before)
+    expect(assistantSegmentsText(after)).toBe('Answer')
+  })
 })
 
 describe('transcriptToMessages', () => {

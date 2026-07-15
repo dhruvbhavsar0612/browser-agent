@@ -54,9 +54,7 @@ export function listAgents(config?: AppConfig): AgentInfo[] {
 export function listVisibleAgents(config?: AppConfig): AgentInfo[] {
   return listAgents(config).filter(
     (agent) =>
-      !agent.hidden &&
-      !agent.disable &&
-      (agent.mode === 'primary' || agent.mode === 'all'),
+      !agent.hidden && !agent.disable && (agent.mode === 'primary' || agent.mode === 'all'),
   )
 }
 
@@ -64,12 +62,7 @@ export function getAgent(name: string, config?: AppConfig): AgentInfo | undefine
   return listAgents(config).find((agent) => agent.name === name)
 }
 
-export {
-  parseModelRef,
-  resolveModelRef,
-  streamChatText,
-  toModelMessages,
-} from './chat.js'
+export { parseModelRef, resolveModelRef, streamChatText, toModelMessages } from './chat.js'
 export type { ChatMessage, ChatRole, ModelRef, StreamChatOptions } from './chat.js'
 export {
   processFullStream,
@@ -82,5 +75,22 @@ export type {
   ProcessFullStreamOptions,
   ProcessFullStreamResult,
 } from './processor.js'
-export { runAgentLoop } from './loop.js'
+export { isContextOverflowError, runAgentLoop } from './loop.js'
 export type { AgentLoopOptions, AgentLoopResult, AgentLoopSession } from './loop.js'
+export {
+  buildSessionPrompt,
+  capToolValue,
+  estimateModelMessageTokens,
+  findCompactionCutoff,
+  prepareSessionPrompt,
+  resolveContextBudget,
+  transcriptToModelMessages,
+  COMPACTION_SUMMARY_SYSTEM_PROMPT,
+} from './context.js'
+export type {
+  CompactionStatus,
+  ContextBudget,
+  PreparedSessionPrompt,
+  PrepareSessionPromptOptions,
+  TranscriptMessage,
+} from './context.js'

@@ -47,11 +47,13 @@ export type ProcessFullStreamOptions = {
   doomLoop?: DoomLoopOptions
   abortSignal?: AbortSignal
   createSegmentId?: (type: 'text' | 'reasoning' | 'tool' | 'step') => string
+  emitErrors?: boolean
 }
 
 export type ProcessFullStreamResult = {
   finishReason?: string
   stopped: boolean
+  error?: unknown
 }
 
 type ThinkEmit = {
@@ -213,6 +215,7 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
 
   let finishReason: string | undefined
   let stopped = false
+  let streamError: unknown
   const thinkParser = new ThinkTagParser()
   let activeContent:
     | {
@@ -456,6 +459,19 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
               : typeof part.error === 'string'
                 ? part.error
                 : 'Tool execution failed'
+          const result = { error: message }
+          const segmentId = toolSegments.get(part.toolCallId) ?? createSegmentId('tool')
+          toolSegments.set(part.toolCallId, segmentId)
+          options.onEvent({
+            kind: 'tool-result',
+            segmentId,
+            toolCallId: part.toolCallId,
+            result,
+          })
+          await options.onPart?.({
+            type: 'tool-result',
+            content: { toolCallId: part.toolCallId, segmentId, result },
+          })
           options.onEvent({ kind: 'error', message })
           break
         }
@@ -490,7 +506,8 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
               : typeof part.error === 'string'
                 ? part.error
                 : String(part.error)
-          options.onEvent({ kind: 'error', message })
+          streamError = part.error
+          if (options.emitErrors !== false) options.onEvent({ kind: 'error', message })
           stopped = true
           break
         }
@@ -514,5 +531,5 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
     }
   }
 
-  return { finishReason, stopped }
+  return { finishReason, stopped, error: streamError }
 }

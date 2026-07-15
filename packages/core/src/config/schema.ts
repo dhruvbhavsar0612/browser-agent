@@ -83,6 +83,15 @@ export const McpServerConfig = z.object({
 })
 export type McpServerConfig = z.infer<typeof McpServerConfig>
 
+export const CompactionConfig = z.object({
+  fallbackContextTokens: z.number().int().min(8_192).default(32_768),
+  threshold: z.number().min(0.7).max(0.75).default(0.72),
+  reserveTokens: z.number().int().min(1_024).default(4_096),
+  recentTurns: z.number().int().min(1).default(6),
+  maxToolResultChars: z.number().int().min(1_000).default(12_000),
+})
+export type CompactionConfig = z.infer<typeof CompactionConfig>
+
 export const AppConfig = z
   .object({
     model: z.string().optional(),
@@ -91,6 +100,13 @@ export const AppConfig = z
     agent: z.record(z.string(), AgentConfig).default({}),
     permission: PermissionConfig.default({ '*': 'ask' }),
     mcp: z.record(z.string(), McpServerConfig).default({}),
+    compaction: CompactionConfig.default({
+      fallbackContextTokens: 32_768,
+      threshold: 0.72,
+      reserveTokens: 4_096,
+      recentTurns: 6,
+      maxToolResultChars: 12_000,
+    }),
     executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
   })
   .superRefine((config, ctx) => {
@@ -251,6 +267,13 @@ Restrictions:
   },
   permission: { '*': 'ask' },
   mcp: {},
+  compaction: {
+    fallbackContextTokens: 32_768,
+    threshold: 0.72,
+    reserveTokens: 4_096,
+    recentTurns: 6,
+    maxToolResultChars: 12_000,
+  },
   executionMode: 'approval',
 }
 
@@ -310,6 +333,7 @@ export function mergeConfig(base: AppConfig, override: AppConfigPatch): AppConfi
     provider: mergeProviders(base.provider, override.provider),
     agent: { ...base.agent, ...override.agent },
     mcp: { ...base.mcp, ...override.mcp },
+    compaction: { ...base.compaction, ...override.compaction },
     permission: override.permission ?? base.permission,
   })
 }

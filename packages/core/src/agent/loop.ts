@@ -35,11 +35,39 @@ export type AgentLoopOptions = {
   onEvent: (event: StreamEvent) => void
   doomLoop?: DoomLoopOptions
   session?: AgentLoopSession
+  onContextOverflow?: (
+    error: unknown,
+  ) => Promise<{ messages: ModelMessage[]; system?: string } | null>
 }
 
 export type AgentLoopResult = {
   finishReason?: string
   stopped: boolean
+}
+
+const CONTEXT_OVERFLOW_PATTERN =
+  /(?:context(?: length| window)?|maximum context|prompt|input).{0,80}(?:exceed|too (?:large|long)|limit|maximum)|too many tokens|token limit|request too large|context_length_exceeded|max_tokens/i
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+export function isContextOverflowError(error: unknown): boolean {
+  if (CONTEXT_OVERFLOW_PATTERN.test(errorMessage(error))) return true
+  if (!error || typeof error !== 'object') return false
+  const value = error as { code?: unknown; type?: unknown; cause?: unknown; responseBody?: unknown }
+  return (
+    value.code === 'context_length_exceeded' ||
+    value.type === 'context_length_exceeded' ||
+    (value.cause !== undefined && isContextOverflowError(value.cause)) ||
+    (value.responseBody !== undefined && isContextOverflowError(value.responseBody))
+  )
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
@@ -76,34 +104,77 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     assistantMessageId = assistantRecord.id
   }
 
-  const result = streamText({
-    model: options.model,
-    messages: options.messages,
-    system: options.system,
-    tools: options.tools,
-    stopWhen,
-    abortSignal: options.abortSignal,
-  })
-
   let assistantPartOrder = 0
-  const streamResult = await processFullStream(result.fullStream, {
-    onEvent: options.onEvent,
-    onPart:
-      options.session && assistantMessageId
-        ? async (part) => {
-            await options.session!.store.appendPart({
-              id: 'id' in part ? part.id : undefined,
-              messageId: assistantMessageId!,
-              type: part.type,
-              content: part.content,
-              order: assistantPartOrder,
-            })
-            assistantPartOrder += 1
-          }
-        : undefined,
-    doomLoop: options.doomLoop,
-    abortSignal: options.abortSignal,
-  })
+  const persistPart =
+    options.session && assistantMessageId
+      ? async (
+          part: Parameters<NonNullable<Parameters<typeof processFullStream>[1]['onPart']>>[0],
+        ) => {
+          await options.session!.store.appendPart({
+            id: 'id' in part ? part.id : undefined,
+            messageId: assistantMessageId!,
+            type: part.type,
+            content: part.content,
+            order: assistantPartOrder,
+          })
+          assistantPartOrder += 1
+        }
+      : undefined
+
+  const execute = async (
+    messages: ModelMessage[],
+    system: string | undefined,
+    canRetry: boolean,
+  ): Promise<Awaited<ReturnType<typeof processFullStream>>> => {
+    let emittedStreamEvent = false
+    const onEvent = (event: StreamEvent) => {
+      if (event.kind !== 'error') emittedStreamEvent = true
+      options.onEvent(event)
+    }
+
+    let streamResult: Awaited<ReturnType<typeof processFullStream>>
+    try {
+      const result = streamText({
+        model: options.model,
+        messages,
+        system,
+        tools: options.tools,
+        stopWhen,
+        abortSignal: options.abortSignal,
+      })
+      streamResult = await processFullStream(result.fullStream, {
+        onEvent,
+        onPart: persistPart,
+        doomLoop: options.doomLoop,
+        abortSignal: options.abortSignal,
+        emitErrors: false,
+      })
+    } catch (error) {
+      streamResult = { stopped: true, error }
+    }
+
+    if (
+      canRetry &&
+      streamResult.error &&
+      !emittedStreamEvent &&
+      !options.abortSignal?.aborted &&
+      isContextOverflowError(streamResult.error)
+    ) {
+      const retryPrompt = await options.onContextOverflow?.(streamResult.error)
+      if (retryPrompt) return execute(retryPrompt.messages, retryPrompt.system ?? system, false)
+    }
+
+    if (streamResult.error) {
+      options.onEvent({ kind: 'error', message: errorMessage(streamResult.error) })
+    }
+    return streamResult
+  }
+
+  const streamResult = await execute(
+    options.messages,
+    options.system,
+    Boolean(options.onContextOverflow),
+  )
 
   if (!options.abortSignal?.aborted && !streamResult.stopped) {
     options.onEvent({ kind: 'done' })

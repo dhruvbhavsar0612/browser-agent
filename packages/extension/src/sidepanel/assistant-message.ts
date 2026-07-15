@@ -177,6 +177,7 @@ export function reduceAssistantSegments(
       return completeStreamingSegments(segments)
 
     case 'permission-ask':
+    case 'compaction':
       return segments
   }
 }

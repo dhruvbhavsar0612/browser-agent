@@ -89,7 +89,7 @@ bus
   })
 
 registerSettingsHandlers(bus, { vault, models, config })
-registerAgentHandlers(bus, { config, vault, sessions })
+registerAgentHandlers(bus, { config, vault, sessions, models })
 registerOAuthHandlers(bus, { vault })
 
 bus.listen()

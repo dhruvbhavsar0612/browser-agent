@@ -5,6 +5,7 @@ export {
   PermissionConfig,
   PermissionAction,
   McpServerConfig,
+  CompactionConfig,
   DEFAULT_CONFIG,
   parseConfig,
   mergeConfig,
@@ -21,6 +22,7 @@ export type {
   PermissionConfig as PermissionConfigType,
   PermissionAction as PermissionActionType,
   McpServerConfig as McpServerConfigType,
+  CompactionConfig as CompactionConfigType,
   ExecutionMode,
 } from './schema.js'
 export { ConfigService } from './service.js'

@@ -59,6 +59,7 @@ export function ChatView({
   const [session, setSession] = useState<SessionRecord | null>(null)
   const [selectedModel, setSelectedModel] = useState('')
   const [loadingModels, setLoadingModels] = useState(true)
+  const [compactionStatus, setCompactionStatus] = useState<string | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<
     'connected' | 'disconnected' | 'reconnecting'
   >('connected')
@@ -208,6 +209,11 @@ export function ChatView({
         return
       }
 
+      if (event.kind === 'compaction') {
+        setCompactionStatus(event.message)
+        return
+      }
+
       if (event.kind === 'error') {
         appendAssistantEvent(event)
         setError(event.message)
@@ -260,6 +266,7 @@ export function ChatView({
 
     if (!sessionId) {
       setMessages([])
+      setCompactionStatus(null)
       setLoadingSession(false)
       setError(null)
       return
@@ -267,6 +274,7 @@ export function ChatView({
 
     setLoadingSession(true)
     setError(null)
+    setCompactionStatus(null)
 
     void sendRequest('session.get', { id: sessionId })
       .then((response) => {
@@ -350,10 +358,6 @@ export function ChatView({
       content: '',
       segments: [],
     }
-    const history: ChatMessage[] = [
-      ...messages.map(({ role, content }) => ({ role, content })),
-      { role: 'user', content: text },
-    ]
 
     void (async () => {
       try {
@@ -374,7 +378,8 @@ export function ChatView({
         }
 
         const request = createRequest('agent.prompt', {
-          messages: history,
+          // Durable history is reconstructed by the background from IndexedDB.
+          messages: [{ role: 'user', content: text }] satisfies ChatMessage[],
           agent,
           sessionId: session.id,
           tabId,
@@ -384,6 +389,7 @@ export function ChatView({
         setMessages((prev) => [...prev, userMessage, assistantMessage])
         setInput('')
         setError(null)
+        setCompactionStatus(null)
         setStreaming(true)
         stream.postMessage(request)
 
@@ -405,7 +411,6 @@ export function ChatView({
     input,
     loadingSession,
     loadingModels,
-    messages,
     onSessionsRefresh,
     selectedModel,
     selectedModelEnabled,
@@ -626,6 +631,12 @@ export function ChatView({
       {connectionStatus !== 'connected' ? (
         <div className="chat-connection" role="status">
           {connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Connection lost — retrying'}
+        </div>
+      ) : null}
+
+      {compactionStatus ? (
+        <div className="chat-connection" role="status">
+          {compactionStatus}
         </div>
       ) : null}
 

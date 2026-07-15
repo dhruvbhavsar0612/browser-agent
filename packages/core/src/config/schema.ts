@@ -14,6 +14,7 @@ export const PermissionConfig = z.union([
   z
     .object({
       page_read: PermissionRule.optional(),
+      grep_page: PermissionRule.optional(),
       click: PermissionRule.optional(),
       type: PermissionRule.optional(),
       navigate: PermissionRule.optional(),
@@ -111,7 +112,12 @@ Be concise, cite specific page content when possible, and ask clarifying questio
       steps: 20,
       permission: {
         page_read: 'allow',
+        grep_page: 'allow',
         tabs: 'allow',
+        tab_focus: 'allow',
+        tab_open: 'ask',
+        tab_close: 'ask',
+        screenshot: 'ask',
         click: 'deny',
         type: 'deny',
         navigate: 'deny',
@@ -134,7 +140,15 @@ Guidelines:
 - Prefer stable selectors and describe what you are doing
 - Stop and report if you are blocked, logged out, or stuck in a loop`,
       steps: 30,
-      permission: { '*': 'ask', echo: 'allow', get_time: 'allow' },
+      permission: {
+        '*': 'ask',
+        page_read: 'allow',
+        grep_page: 'allow',
+        tabs: 'allow',
+        tab_focus: 'allow',
+        echo: 'allow',
+        get_time: 'allow',
+      },
     },
     explore: {
       description: 'Fast multi-tab reconnaissance',
@@ -151,7 +165,12 @@ Restrictions:
       steps: 20,
       permission: {
         page_read: 'allow',
+        grep_page: 'allow',
         tabs: 'allow',
+        tab_focus: 'allow',
+        tab_open: 'ask',
+        tab_close: 'ask',
+        screenshot: 'ask',
         click: 'deny',
         type: 'deny',
         navigate: 'deny',

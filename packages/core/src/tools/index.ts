@@ -1,10 +1,20 @@
 import { z } from 'zod'
+import { navigateTool } from './navigate.js'
+import { pageGrepTool } from './page/grep.js'
+import { pageReadTool } from './page/read.js'
+import { pageScreenshotTool } from './page/screenshot.js'
+import { tabsCloseTool } from './tabs/close.js'
+import { tabsFocusTool } from './tabs/focus.js'
+import { tabsListTool } from './tabs/list.js'
+import { tabsOpenTool } from './tabs/open.js'
 import { echoTool } from './stubs/echo.js'
 import { getTimeTool } from './stubs/get-time.js'
 
 export interface ToolContext {
   sessionId: string
   tabId?: number
+  boundTabId?: number
+  browser?: import('./browser.js').BrowserBridge
   signal?: AbortSignal
   ask: (input: {
     permission: string
@@ -41,13 +51,42 @@ export function defineTool<T extends z.ZodTypeAny>(tool: {
 }
 
 export function listTools(): ToolDefinition[] {
-  return [echoTool, getTimeTool]
+  return [
+    echoTool,
+    getTimeTool,
+    tabsListTool,
+    tabsFocusTool,
+    tabsOpenTool,
+    tabsCloseTool,
+    navigateTool,
+    pageReadTool,
+    pageGrepTool,
+    pageScreenshotTool,
+  ]
 }
 
 export { echoTool } from './stubs/echo.js'
 export { getTimeTool } from './stubs/get-time.js'
+export { navigateTool } from './navigate.js'
+export { pageGrepTool } from './page/grep.js'
+export { pageReadTool } from './page/read.js'
+export { pageScreenshotTool } from './page/screenshot.js'
+export { tabsCloseTool } from './tabs/close.js'
+export { tabsFocusTool } from './tabs/focus.js'
+export { tabsListTool } from './tabs/list.js'
+export { tabsOpenTool } from './tabs/open.js'
 export {
   filterToolsByPermission,
   isToolAvailable,
   toAiSdkTools,
 } from './ai-sdk.js'
+export {
+  requireBrowser,
+  resolveTabId,
+  type A11yFilter,
+  type A11yTreeResult,
+  type BrowserBridge,
+  type BrowserToolContext,
+  type ScreenshotResult,
+  type TabInfo,
+} from './browser.js'

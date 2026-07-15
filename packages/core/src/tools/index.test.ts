@@ -11,9 +11,20 @@ import {
 } from './index.js'
 
 describe('tools', () => {
-  it('lists stub tools', () => {
+  it('lists registered tools', () => {
     const tools = listTools()
-    expect(tools.map((tool) => tool.id)).toEqual(['echo', 'get_time'])
+    expect(tools.map((tool) => tool.id)).toEqual([
+      'echo',
+      'get_time',
+      'tabs_list',
+      'tabs_focus',
+      'tabs_open',
+      'tabs_close',
+      'navigate',
+      'page_read',
+      'page_grep',
+      'page_screenshot',
+    ])
   })
 
   it('filters denied tools by permission rules', () => {
@@ -24,12 +35,22 @@ describe('tools', () => {
     expect(isToolAvailable(echoTool, denyAll)).toBe(true)
   })
 
-  it('allows stub tools for browse agent defaults', () => {
+  it('allows browse agent tools by default permission rules', () => {
     const browseRules = fromConfig(DEFAULT_CONFIG.agent.browse?.permission ?? {})
     expect(filterToolsByPermission(listTools(), browseRules).map((tool) => tool.id)).toEqual([
       'echo',
       'get_time',
+      'tabs_list',
+      'tabs_focus',
+      'tabs_open',
+      'tabs_close',
+      'page_read',
+      'page_grep',
+      'page_screenshot',
     ])
+    expect(filterToolsByPermission(listTools(), browseRules).map((tool) => tool.id)).not.toContain(
+      'navigate',
+    )
   })
 
   it('converts tools to AI SDK tools and executes with permission ask', async () => {

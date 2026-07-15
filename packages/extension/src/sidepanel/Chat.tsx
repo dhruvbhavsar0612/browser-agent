@@ -178,14 +178,28 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
       { role: 'user', content: text },
     ]
 
-    const request = createRequest('agent.prompt', { messages: history, agent })
-    activeRequestIdRef.current = request.id
+    void (async () => {
+      let tabId: number | undefined
+      try {
+        const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+        tabId = active?.id
+      } catch {
+        tabId = undefined
+      }
 
-    setMessages((prev) => [...prev, userMessage, assistantMessage])
-    setInput('')
-    setError(null)
-    setStreaming(true)
-    port.postMessage(request)
+      const request = createRequest('agent.prompt', {
+        messages: history,
+        agent,
+        tabId,
+      })
+      activeRequestIdRef.current = request.id
+
+      setMessages((prev) => [...prev, userMessage, assistantMessage])
+      setInput('')
+      setError(null)
+      setStreaming(true)
+      port.postMessage(request)
+    })()
   }, [agent, input, messages, streaming])
 
   const stop = useCallback(() => {

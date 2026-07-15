@@ -29,8 +29,17 @@ export default defineManifest({
     default_path: 'src/sidepanel/index.html',
   },
   permissions: ['sidePanel', 'storage', 'activeTab', 'scripting', 'tabs', 'alarms'],
-  // Needed so the service worker can call BYOK provider APIs and GET {baseURL}/models
+  // BYOK APIs + page_screenshot: activeTab + tabs + host_permissions suffice for
+  // chrome.tabs.captureVisibleTab (no <all_urls> or chrome.debugger).
   host_permissions: ['https://*/*', 'http://*/*'],
+  content_scripts: [
+    {
+      matches: ['https://*/*', 'http://*/*'],
+      js: ['src/content/a11y-tree.ts'],
+      run_at: 'document_start',
+      all_frames: true,
+    },
+  ],
   commands: {
     'toggle-side-panel': {
       suggested_key: {

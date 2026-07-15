@@ -3,6 +3,7 @@ import {
   MissingApiKeyError,
   PermissionEngine,
   buildRunRuleset,
+  createMcpAiSdkTools,
   credentialSecretToApiKey,
   filterToolsByPermission,
   generateText,
@@ -21,6 +22,7 @@ import {
   type ConfigService,
   type Envelope,
   type ModelsDevService,
+  type RemoteMcpRegistry,
   type SessionStore,
   COMPACTION_SUMMARY_SYSTEM_PROMPT,
   createResponse,
@@ -40,6 +42,7 @@ export type AgentHandlerDeps = {
   sessions?: SessionStore
   models?: ModelsDevService
   permission?: PermissionEngine
+  mcp?: RemoteMcpRegistry
 }
 
 const activeRuns = new Map<string, AbortController>()
@@ -200,7 +203,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         }
       }
 
-      const tools = toAiSdkTools(availableTools, {
+      const browserTools = toAiSdkTools(availableTools, {
         sessionId,
         tabId: payload.tabId,
         boundTabId,
@@ -215,6 +218,22 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
             metadata: input.metadata,
           }),
       })
+      const remoteTools = deps.mcp
+        ? await createMcpAiSdkTools({
+            registry: deps.mcp,
+            appConfig,
+            permission,
+            ruleset,
+            sessionId,
+            signal: controller.signal,
+            maxResultChars: appConfig.compaction.maxToolResultChars,
+            occupiedNames: Object.keys(browserTools),
+          })
+        : { tools: {}, metadata: {}, errors: [] }
+      const tools = { ...browserTools, ...remoteTools.tools }
+      if (remoteTools.errors.length) {
+        console.warn('[browser-agent] unavailable MCP servers', remoteTools.errors)
+      }
 
       let promptMessages = toModelMessages(messages)
       let promptSystem = systemPrompt
@@ -366,6 +385,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       port.postMessage(createResponse(message, 'agent.prompt', { ok: false, error: messageText }))
     } finally {
       activeRuns.delete(requestId)
+      await deps.mcp?.closeAll()
       stopKeepalive()
       void hideAllAgentIndicators()
     }

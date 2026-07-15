@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  createMemoryStorage,
-  VAULT_LOCAL_KEY,
-  VAULT_META_KEY,
-} from '../config/storage.js'
+import { createMemoryStorage, VAULT_LOCAL_KEY, VAULT_META_KEY } from '../config/storage.js'
 import {
   decryptAesGcm,
   encryptAesGcm,
@@ -33,9 +29,8 @@ describe('CredentialVault', () => {
     const got = await vault.get('openai')
     expect(got).toEqual({ providerId: 'openai', secret: 'sk-live-abc', type: 'api' })
 
-    const raw = await storage.getLocal<Record<string, { ciphertext: string; iv: string }>>(
-      VAULT_LOCAL_KEY,
-    )
+    const raw =
+      await storage.getLocal<Record<string, { ciphertext: string; iv: string }>>(VAULT_LOCAL_KEY)
     expect(raw?.openai).toBeDefined()
     expect(JSON.stringify(raw)).not.toContain('sk-live-abc')
 
@@ -178,10 +173,30 @@ describe('CredentialVault', () => {
     const meta = await storage.getLocal<string>(VAULT_META_KEY)
     expect(meta).toBeTruthy()
     const key = await importKeyRaw(meta!)
-    const store = await storage.getLocal<
-      Record<string, { api?: { ciphertext: string; iv: string }; oauth?: { ciphertext: string; iv: string } }>
-    >(VAULT_LOCAL_KEY)
+    const store =
+      await storage.getLocal<
+        Record<
+          string,
+          { api?: { ciphertext: string; iv: string }; oauth?: { ciphertext: string; iv: string } }
+        >
+      >(VAULT_LOCAL_KEY)
     const decrypted = await decryptAesGcm(key, store!.openai!.api!)
     expect(decrypted).toBe('sk-persisted')
+  })
+
+  it('isolates encrypted MCP credentials from provider listings and sync storage', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'provider-secret')
+    await vault.setMcp('docs', 'mcp-secret')
+
+    expect(await vault.list()).toEqual([{ providerId: 'openai', type: 'api' }])
+    expect(await vault.listMcp()).toEqual([{ serverId: 'docs', type: 'api' }])
+    expect((await vault.getMcp('docs'))?.secret).toBe('mcp-secret')
+
+    const stored = await storage.getLocal<unknown>(VAULT_LOCAL_KEY)
+    expect(JSON.stringify(stored)).not.toContain('mcp-secret')
+    expect(JSON.stringify(stored)).not.toContain('provider-secret')
+    expect(await storage.getSync(VAULT_LOCAL_KEY)).toBeUndefined()
   })
 })

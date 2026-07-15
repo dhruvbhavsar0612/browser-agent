@@ -5,12 +5,15 @@ export {
   PermissionConfig,
   PermissionAction,
   McpServerConfig,
+  McpToolConfig,
+  McpAuthConfig,
   CompactionConfig,
   DEFAULT_CONFIG,
   parseConfig,
   mergeConfig,
   isProviderEnabled,
   isModelEnabled,
+  isSecureRemoteUrl,
 } from './schema.js'
 export type {
   AppConfig as AppConfigType,
@@ -22,6 +25,9 @@ export type {
   PermissionConfig as PermissionConfigType,
   PermissionAction as PermissionActionType,
   McpServerConfig as McpServerConfigType,
+  McpServerConfigPatch,
+  McpToolConfig as McpToolConfigType,
+  McpAuthConfig as McpAuthConfigType,
   CompactionConfig as CompactionConfigType,
   ExecutionMode,
 } from './schema.js'
@@ -34,5 +40,6 @@ export {
   MODELS_CACHE_KEY,
   VAULT_LOCAL_KEY,
   VAULT_META_KEY,
+  MCP_DISCOVERY_CACHE_KEY,
 } from './storage.js'
 export type { StorageAdapter } from './storage.js'

@@ -75,12 +75,74 @@ export const AgentConfig = z.object({
 })
 export type AgentConfig = z.infer<typeof AgentConfig>
 
-export const McpServerConfig = z.object({
-  type: z.enum(['remote']).default('remote'),
-  url: z.string().url(),
-  headers: z.record(z.string(), z.string()).optional(),
-  enabled: z.boolean().optional(),
+const SECRET_HEADER_NAME = /^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token)$/i
+
+export function isSecureRemoteUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'https:') return true
+    return (
+      url.protocol === 'http:' &&
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+    )
+  } catch {
+    return false
+  }
+}
+
+export const McpToolConfig = z.object({
+  enabled: z.boolean().default(true),
 })
+export type McpToolConfig = z.infer<typeof McpToolConfig>
+
+export const McpAuthConfig = z
+  .object({
+    mode: z.enum(['none', 'bearer', 'api-key', 'oauth']).default('none'),
+    /** Header name only. Its value always lives in the encrypted MCP vault namespace. */
+    headerName: z.string().min(1).max(128).optional(),
+  })
+  .default({ mode: 'none' })
+export type McpAuthConfig = z.infer<typeof McpAuthConfig>
+
+export const McpServerConfig = z
+  .object({
+    type: z.enum(['remote']).default('remote'),
+    name: z.string().min(1).max(100).optional(),
+    url: z
+      .string()
+      .url()
+      .refine(
+        isSecureRemoteUrl,
+        'Remote MCP URL must use HTTPS (HTTP is allowed for localhost only)',
+      ),
+    transport: z.enum(['auto', 'streamable-http', 'sse']).default('auto'),
+    headers: z
+      .record(z.string().min(1), z.string())
+      .default({})
+      .superRefine((headers, ctx) => {
+        for (const name of Object.keys(headers)) {
+          if (SECRET_HEADER_NAME.test(name)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [name],
+              message: 'Secret header values must be stored in the encrypted MCP credential vault',
+            })
+          }
+        }
+      }),
+    auth: McpAuthConfig,
+    enabled: z.boolean().default(true),
+    tools: z.record(z.string(), McpToolConfig).default({}),
+    provenance: z
+      .object({
+        provider: z.enum(['official-mcp', 'smithery', 'glama', 'manual']),
+        sourceUrl: z.string().url().optional(),
+        sourceId: z.string().optional(),
+        version: z.string().optional(),
+      })
+      .optional(),
+  })
+  .strict()
 export type McpServerConfig = z.infer<typeof McpServerConfig>
 
 export const CompactionConfig = z.object({
@@ -140,10 +202,16 @@ export type ProviderConfigPatch = Partial<Omit<ProviderConfig, 'api' | 'models' 
   models?: Record<string, Partial<ProviderModelConfig>>
 }
 
-export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider'> & {
+export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools'>> & {
+  tools?: Record<string, Partial<McpToolConfig>>
+}
+
+export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider' | 'mcp'> & {
   /** null explicitly clears the default across JSON/chrome messaging boundaries. */
   model?: string | null
   provider?: Record<string, ProviderConfigPatch>
+  /** A null server removes it. Other entries merge to preserve per-tool choices. */
+  mcp?: Record<string, McpServerConfigPatch | null>
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -323,6 +391,25 @@ function mergeProviders(
   return merged
 }
 
+function mergeMcp(base: AppConfig['mcp'], patch: AppConfigPatch['mcp']): AppConfig['mcp'] {
+  const merged: Record<string, McpServerConfig> = { ...base }
+  for (const [serverId, serverPatch] of Object.entries(patch ?? {})) {
+    if (serverPatch === null) {
+      delete merged[serverId]
+      continue
+    }
+    const current = base[serverId]
+    merged[serverId] = McpServerConfig.parse({
+      ...current,
+      ...serverPatch,
+      headers: serverPatch.headers ?? current?.headers ?? {},
+      auth: { ...current?.auth, ...serverPatch.auth },
+      tools: { ...current?.tools, ...serverPatch.tools },
+    })
+  }
+  return merged
+}
+
 export function mergeConfig(base: AppConfig, override: AppConfigPatch): AppConfig {
   const model =
     override.model === null ? undefined : override.model !== undefined ? override.model : base.model
@@ -332,7 +419,7 @@ export function mergeConfig(base: AppConfig, override: AppConfigPatch): AppConfi
     model,
     provider: mergeProviders(base.provider, override.provider),
     agent: { ...base.agent, ...override.agent },
-    mcp: { ...base.mcp, ...override.mcp },
+    mcp: mergeMcp(base.mcp, override.mcp),
     compaction: { ...base.compaction, ...override.compaction },
     permission: override.permission ?? base.permission,
   })

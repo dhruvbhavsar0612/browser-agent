@@ -59,4 +59,51 @@ describe('config schema', () => {
       }),
     ).toThrow(/Default model must belong/)
   })
+
+  it('validates and deeply merges remote MCP servers', () => {
+    const configured = mergeConfig(DEFAULT_CONFIG, {
+      mcp: {
+        docs: {
+          name: 'Docs',
+          url: 'https://mcp.example.com/api',
+          transport: 'auto',
+          auth: { mode: 'oauth' },
+          tools: { search: { enabled: true } },
+        },
+      },
+    })
+    const patched = mergeConfig(configured, {
+      mcp: { docs: { enabled: false, tools: { search: { enabled: false } } } },
+    })
+    expect(patched.mcp.docs).toMatchObject({
+      name: 'Docs',
+      url: 'https://mcp.example.com/api',
+      enabled: false,
+      tools: { search: { enabled: false } },
+    })
+    expect(mergeConfig(patched, { mcp: { docs: null } }).mcp.docs).toBeUndefined()
+  })
+
+  it('requires HTTPS except for localhost and rejects secret synced headers', () => {
+    expect(() =>
+      mergeConfig(DEFAULT_CONFIG, {
+        mcp: { bad: { url: 'http://mcp.example.com' } },
+      }),
+    ).toThrow(/HTTPS/)
+    expect(
+      mergeConfig(DEFAULT_CONFIG, {
+        mcp: { local: { url: 'http://localhost:8787/mcp' } },
+      }).mcp.local?.url,
+    ).toBe('http://localhost:8787/mcp')
+    expect(() =>
+      mergeConfig(DEFAULT_CONFIG, {
+        mcp: {
+          bad: {
+            url: 'https://mcp.example.com',
+            headers: { Authorization: 'Bearer secret' },
+          },
+        },
+      }),
+    ).toThrow(/credential vault/)
+  })
 })

@@ -1,8 +1,4 @@
-import {
-  VAULT_LOCAL_KEY,
-  VAULT_META_KEY,
-  type StorageAdapter,
-} from '../config/storage.js'
+import { VAULT_LOCAL_KEY, VAULT_META_KEY, type StorageAdapter } from '../config/storage.js'
 import {
   decryptAesGcm,
   encryptAesGcm,
@@ -23,6 +19,17 @@ export interface VaultCredential {
 export interface VaultListEntry {
   providerId: string
   type: CredentialType
+}
+
+export interface McpVaultListEntry {
+  serverId: string
+  type: CredentialType
+}
+
+const MCP_CREDENTIAL_PREFIX = 'mcp/'
+
+function mcpCredentialKey(serverId: string): string {
+  return `${MCP_CREDENTIAL_PREFIX}${encodeURIComponent(serverId)}`
 }
 
 interface EncryptedSecret {
@@ -75,12 +82,21 @@ export class CredentialVault {
   constructor(private readonly storage: StorageAdapter) {}
 
   async set(providerId: string, secret: string, type: CredentialType = 'api'): Promise<void> {
+    await this.setByKey(providerId, secret, type)
+  }
+
+  /** Dedicated encrypted namespace for remote MCP bearer/API/OAuth credentials. */
+  async setMcp(serverId: string, secret: string, type: CredentialType = 'api'): Promise<void> {
+    await this.setByKey(mcpCredentialKey(serverId), secret, type)
+  }
+
+  private async setByKey(keyId: string, secret: string, type: CredentialType): Promise<void> {
     const key = await this.getOrCreateKey()
     const encrypted = await encryptAesGcm(key, secret)
     const store = await this.readStore()
-    const record = normalizeRecord(store[providerId])
+    const record = normalizeRecord(store[keyId])
     record[type] = { ciphertext: encrypted.ciphertext, iv: encrypted.iv }
-    store[providerId] = record
+    store[keyId] = record
     await this.writeStore(store)
   }
 
@@ -88,22 +104,30 @@ export class CredentialVault {
    * Returns the preferred credential for a provider: OAuth when present, else API key.
    * Pass `type` to fetch a specific credential.
    */
-  async get(
-    providerId: string,
+  async get(providerId: string, type?: CredentialType): Promise<VaultCredential | undefined> {
+    return this.getByKey(providerId, providerId, type)
+  }
+
+  async getMcp(serverId: string, type?: CredentialType): Promise<VaultCredential | undefined> {
+    return this.getByKey(mcpCredentialKey(serverId), serverId, type)
+  }
+
+  private async getByKey(
+    keyId: string,
+    publicId: string,
     type?: CredentialType,
   ): Promise<VaultCredential | undefined> {
     const store = await this.readStore()
-    const record = normalizeRecord(store[providerId])
+    const record = normalizeRecord(store[keyId])
     if (!record.api && !record.oauth) return undefined
 
-    const resolvedType: CredentialType =
-      type ?? (record.oauth ? 'oauth' : 'api')
+    const resolvedType: CredentialType = type ?? (record.oauth ? 'oauth' : 'api')
     const blob = record[resolvedType]
     if (!blob) return undefined
 
     const key = await this.getOrCreateKey()
     const secret = await decryptAesGcm(key, blob)
-    return { providerId, secret, type: resolvedType }
+    return { providerId: publicId, secret, type: resolvedType }
   }
 
   /** Returns provider ids and types only — never secrets. May include two entries per provider. */
@@ -111,9 +135,23 @@ export class CredentialVault {
     const store = await this.readStore()
     const entries: VaultListEntry[] = []
     for (const [providerId, raw] of Object.entries(store)) {
+      if (providerId.startsWith(MCP_CREDENTIAL_PREFIX)) continue
       const record = normalizeRecord(raw)
       if (record.api) entries.push({ providerId, type: 'api' })
       if (record.oauth) entries.push({ providerId, type: 'oauth' })
+    }
+    return entries
+  }
+
+  async listMcp(): Promise<McpVaultListEntry[]> {
+    const store = await this.readStore()
+    const entries: McpVaultListEntry[] = []
+    for (const [key, raw] of Object.entries(store)) {
+      if (!key.startsWith(MCP_CREDENTIAL_PREFIX)) continue
+      const serverId = decodeURIComponent(key.slice(MCP_CREDENTIAL_PREFIX.length))
+      const record = normalizeRecord(raw)
+      if (record.api) entries.push({ serverId, type: 'api' })
+      if (record.oauth) entries.push({ serverId, type: 'oauth' })
     }
     return entries
   }
@@ -123,21 +161,29 @@ export class CredentialVault {
    * When `type` is omitted, removes both API and OAuth entries.
    */
   async delete(providerId: string, type?: CredentialType): Promise<void> {
+    await this.deleteByKey(providerId, type)
+  }
+
+  async deleteMcp(serverId: string, type?: CredentialType): Promise<void> {
+    await this.deleteByKey(mcpCredentialKey(serverId), type)
+  }
+
+  private async deleteByKey(keyId: string, type?: CredentialType): Promise<void> {
     const store = await this.readStore()
-    if (!(providerId in store)) return
+    if (!(keyId in store)) return
 
     if (!type) {
-      delete store[providerId]
+      delete store[keyId]
       await this.writeStore(store)
       return
     }
 
-    const record = normalizeRecord(store[providerId])
+    const record = normalizeRecord(store[keyId])
     delete record[type]
     if (!record.api && !record.oauth) {
-      delete store[providerId]
+      delete store[keyId]
     } else {
-      store[providerId] = record
+      store[keyId] = record
     }
     await this.writeStore(store)
   }

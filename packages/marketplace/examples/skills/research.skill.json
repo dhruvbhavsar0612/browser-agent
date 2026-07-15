@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "skill",
+  "id": "dev.browser-agent/research",
+  "version": "1.0.0",
+  "name": "Example research",
+  "description": "Instructions for cautious, citation-oriented web research.",
+  "instructions": {
+    "path": "skills/research.md"
+  },
+  "requiredConnectors": [
+    {
+      "id": "dev.browser-agent/example-search",
+      "version": "1.0.0"
+    }
+  ],
+  "requiredTools": [
+    {
+      "connectorId": "dev.browser-agent/example-search",
+      "name": "search"
+    }
+  ],
+  "compatibility": {
+    "browserAgent": ">=0.4.1",
+    "mcpProtocol": ">=2025-03-26",
+    "remoteMcpConfigSchema": "1"
+  },
+  "license": {
+    "spdx": "MIT"
+  },
+  "provenance": {
+    "provider": "manual",
+    "sourceUrl": "https://example.com/research/skill.json",
+    "sourceId": "dev.browser-agent/research@1.0.0"
+  },
+  "checksum": {
+    "algorithm": "sha256",
+    "digest": "bed3d63485d0456bac1cad16255074b0e64663187d52c7d0c92ae5b72b24518e"
+  }
+}

@@ -39,6 +39,10 @@
     "./vault": {
       "types": "./src/vault/index.ts",
       "default": "./src/vault/index.ts"
+    },
+    "./marketplace": {
+      "types": "./src/marketplace/index.ts",
+      "default": "./src/marketplace/index.ts"
     }
   },
   "scripts": {

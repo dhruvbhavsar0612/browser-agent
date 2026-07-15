@@ -18,7 +18,11 @@ import {
   type SessionStore,
   createResponse,
 } from '@browser-agent/core'
+import { createBrowserBridge } from '../browser/bridge.js'
+import { bindSessionTab, getBoundTabId } from '../browser/session-tab.js'
 import { startKeepalive, stopKeepalive, type MessageBus } from '../bus.js'
+
+const browserBridge = createBrowserBridge()
 
 export type AgentHandlerDeps = {
   config: ConfigService
@@ -29,7 +33,7 @@ export type AgentHandlerDeps = {
 
 const activeRuns = new Map<string, AbortController>()
 
-const STUB_AUTO_ALLOW = new Set(['echo', 'get_time'])
+const STUB_AUTO_ALLOW = new Set(['echo', 'get_time', 'tabs', 'tab_focus'])
 
 export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): void {
   const permission = deps.permission ?? new PermissionEngine()
@@ -126,10 +130,16 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       })
 
       const sessionId = payload.sessionId ?? requestId
+      if (payload.tabId != null) {
+        bindSessionTab(sessionId, payload.tabId)
+      }
+      const boundTabId = payload.tabId ?? getBoundTabId(sessionId)
       const availableTools = filterToolsByPermission(listTools(), ruleset)
       const tools = toAiSdkTools(availableTools, {
         sessionId,
         tabId: payload.tabId,
+        boundTabId,
+        browser: browserBridge,
         signal: controller.signal,
         ask: (input) =>
           permission.ask({

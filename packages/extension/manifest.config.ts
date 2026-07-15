@@ -31,6 +31,14 @@ export default defineManifest({
   permissions: ['sidePanel', 'storage', 'activeTab', 'scripting', 'tabs', 'alarms'],
   // Needed so the service worker can call BYOK provider APIs and GET {baseURL}/models
   host_permissions: ['https://*/*', 'http://*/*'],
+  content_scripts: [
+    {
+      matches: ['https://*/*', 'http://*/*'],
+      js: ['src/content/a11y-tree.ts'],
+      run_at: 'document_start',
+      all_frames: true,
+    },
+  ],
   commands: {
     'toggle-side-panel': {
       suggested_key: {

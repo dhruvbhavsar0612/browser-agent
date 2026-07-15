@@ -135,6 +135,15 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       }
       const boundTabId = payload.tabId ?? getBoundTabId(sessionId)
       const availableTools = filterToolsByPermission(listTools(), ruleset)
+
+      let systemPrompt = agentInfo?.prompt
+      if (boundTabId != null) {
+        const tab = await browserBridge.tabsGet(boundTabId)
+        if (tab) {
+          systemPrompt = `${systemPrompt ?? ''}\n\nActive tab: "${tab.title}" — ${tab.url} (tabId ${tab.id})`.trim()
+        }
+      }
+
       const tools = toAiSdkTools(availableTools, {
         sessionId,
         tabId: payload.tabId,
@@ -154,7 +163,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       await runAgentLoop({
         model,
         messages: toModelMessages(messages),
-        system: agentInfo?.prompt,
+        system: systemPrompt,
         tools,
         steps: agentInfo?.steps ?? 5,
         abortSignal: controller.signal,

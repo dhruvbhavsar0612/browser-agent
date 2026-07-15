@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { navigateTool } from './navigate.js'
+import { pageGrepTool } from './page/grep.js'
+import { pageReadTool } from './page/read.js'
 import { pageScreenshotTool } from './page/screenshot.js'
 import { tabsCloseTool } from './tabs/close.js'
 import { tabsFocusTool } from './tabs/focus.js'
@@ -57,6 +59,8 @@ export function listTools(): ToolDefinition[] {
     tabsOpenTool,
     tabsCloseTool,
     navigateTool,
+    pageReadTool,
+    pageGrepTool,
     pageScreenshotTool,
   ]
 }
@@ -64,6 +68,8 @@ export function listTools(): ToolDefinition[] {
 export { echoTool } from './stubs/echo.js'
 export { getTimeTool } from './stubs/get-time.js'
 export { navigateTool } from './navigate.js'
+export { pageGrepTool } from './page/grep.js'
+export { pageReadTool } from './page/read.js'
 export { pageScreenshotTool } from './page/screenshot.js'
 export { tabsCloseTool } from './tabs/close.js'
 export { tabsFocusTool } from './tabs/focus.js'

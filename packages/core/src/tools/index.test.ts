@@ -21,6 +21,8 @@ describe('tools', () => {
       'tabs_open',
       'tabs_close',
       'navigate',
+      'page_read',
+      'page_grep',
       'page_screenshot',
     ])
   })
@@ -42,6 +44,8 @@ describe('tools', () => {
       'tabs_focus',
       'tabs_open',
       'tabs_close',
+      'page_read',
+      'page_grep',
       'page_screenshot',
     ])
     expect(filterToolsByPermission(listTools(), browseRules).map((tool) => tool.id)).not.toContain(

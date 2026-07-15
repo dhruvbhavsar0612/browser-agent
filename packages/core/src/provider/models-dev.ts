@@ -37,9 +37,24 @@ export type ModelsCatalog = z.infer<typeof CatalogSchema>
 export const MODELS_DEV_URL = 'https://models.dev/api.json'
 export const MODELS_CACHE_TTL_MS = 5 * 60 * 1000
 
-export interface ModelsCacheEntry {
+export type ModelDiscoverySource = 'network' | 'cache' | 'snapshot'
+
+export interface ProviderModelsCacheEntry {
   fetchedAt: number
-  catalog: ModelsCatalog
+  provider: ProviderInfo
+  source: Exclude<ModelDiscoverySource, 'cache'>
+}
+
+export interface ModelsCacheEntry {
+  providers: Record<string, ProviderModelsCacheEntry>
+}
+
+export interface ProviderDiscoveryResult {
+  provider: ProviderInfo
+  fetchedAt: number
+  source: ModelDiscoverySource
+  offline: boolean
+  error?: string
 }
 
 function toProviderInfo(providerID: string, raw: z.infer<typeof ProviderSchema>): ProviderInfo {
@@ -72,36 +87,111 @@ export class ModelsDevService {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async getCatalog(opts?: { forceRefresh?: boolean }): Promise<ModelsCatalog> {
-    const cached = await this.storage.getLocal<ModelsCacheEntry>(MODELS_CACHE_KEY)
-    const fresh =
-      cached && !opts?.forceRefresh && Date.now() - cached.fetchedAt < MODELS_CACHE_TTL_MS
-        ? cached.catalog
-        : null
-
-    if (fresh) return fresh
+  /**
+   * Discover one connected provider. The full models.dev response is never
+   * persisted or returned; only the requested provider is cached locally.
+   */
+  async discoverProvider(
+    providerID: string,
+    opts?: { forceRefresh?: boolean },
+  ): Promise<ProviderDiscoveryResult> {
+    const cached = await this.getCacheEntry(providerID)
+    if (cached && !opts?.forceRefresh && Date.now() - cached.fetchedAt < MODELS_CACHE_TTL_MS) {
+      return {
+        provider: cached.provider,
+        fetchedAt: cached.fetchedAt,
+        source: 'cache',
+        offline: false,
+      }
+    }
 
     try {
       const res = await this.fetchImpl(MODELS_DEV_URL)
       if (!res.ok) throw new Error(`models.dev HTTP ${res.status}`)
-      const json = CatalogSchema.parse(await res.json())
-      await this.storage.setLocal(MODELS_CACHE_KEY, {
-        fetchedAt: Date.now(),
-        catalog: json,
-      } satisfies ModelsCacheEntry)
-      return json
-    } catch {
-      if (cached?.catalog) return cached.catalog
-      return getBundledSnapshot()
+      const catalog = CatalogSchema.parse(await res.json())
+      const rawProvider = catalog[providerID]
+      if (!rawProvider) {
+        throw new Error(`models.dev has no provider named "${providerID}"`)
+      }
+      const provider = toProviderInfo(providerID, rawProvider)
+      const fetchedAt = Date.now()
+      await this.cacheProvider(provider, { fetchedAt, source: 'network' })
+      return { provider, fetchedAt, source: 'network', offline: false }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      if (cached) {
+        return {
+          provider: cached.provider,
+          fetchedAt: cached.fetchedAt,
+          source: 'cache',
+          offline: true,
+          error,
+        }
+      }
+
+      const bundled = getBundledSnapshot()[providerID]
+      if (!bundled) throw new Error(error)
+      const provider = toProviderInfo(providerID, bundled)
+      const fetchedAt = Date.now()
+      await this.cacheProvider(provider, { fetchedAt, source: 'snapshot' })
+      return {
+        provider,
+        fetchedAt,
+        source: 'snapshot',
+        offline: true,
+        error,
+      }
     }
   }
 
-  async listProviders(opts?: { forceRefresh?: boolean }): Promise<ProviderInfo[]> {
-    return catalogToProviders(await this.getCatalog(opts))
+  async getCachedProvider(providerID: string): Promise<ProviderDiscoveryResult | null> {
+    const cached = await this.getCacheEntry(providerID)
+    if (!cached) return null
+    return {
+      provider: cached.provider,
+      fetchedAt: cached.fetchedAt,
+      source: 'cache',
+      offline: false,
+    }
   }
 
-  async listModels(providerID: string, opts?: { forceRefresh?: boolean }): Promise<ModelInfo[]> {
-    const providers = await this.listProviders(opts)
-    return providers.find((p) => p.id === providerID)?.models ?? []
+  async cacheProvider(
+    provider: ProviderInfo,
+    opts?: { fetchedAt?: number; source?: Exclude<ModelDiscoverySource, 'cache'> },
+  ): Promise<void> {
+    const cache = await this.readCache()
+    cache.providers[provider.id] = {
+      provider,
+      fetchedAt: opts?.fetchedAt ?? Date.now(),
+      source: opts?.source ?? 'network',
+    }
+    await this.storage.setLocal(MODELS_CACHE_KEY, cache)
+  }
+
+  async removeCachedProvider(providerID: string): Promise<void> {
+    const cache = await this.readCache()
+    delete cache.providers[providerID]
+    await this.storage.setLocal(MODELS_CACHE_KEY, cache)
+  }
+
+  private async getCacheEntry(providerID: string): Promise<ProviderModelsCacheEntry | null> {
+    return (await this.readCache()).providers[providerID] ?? null
+  }
+
+  private async readCache(): Promise<ModelsCacheEntry> {
+    const cached = await this.storage.getLocal<unknown>(MODELS_CACHE_KEY)
+    if (
+      cached &&
+      typeof cached === 'object' &&
+      'providers' in cached &&
+      cached.providers &&
+      typeof cached.providers === 'object'
+    ) {
+      return {
+        providers: { ...(cached.providers as Record<string, ProviderModelsCacheEntry>) },
+      }
+    }
+    // Deliberately ignore the legacy full-catalog cache.
+    return { providers: {} }
   }
 }

@@ -26,6 +26,7 @@ export const MessageType = z.enum([
   'oauth.complete',
   'oauth.disconnect',
   'models.list',
+  'models.discover',
   'model.test',
   'agent.prompt',
   'agent.stop',
@@ -82,7 +83,11 @@ export function createRequest(type: MessageType, payload?: unknown): Envelope {
 }
 
 /** Response that reuses the request's correlation id. */
-export function createResponse(request: Pick<Envelope, 'id'>, type: MessageType, payload?: unknown): Envelope {
+export function createResponse(
+  request: Pick<Envelope, 'id'>,
+  type: MessageType,
+  payload?: unknown,
+): Envelope {
   return createEnvelope(type, payload, request.id)
 }
 

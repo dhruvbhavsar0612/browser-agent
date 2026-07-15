@@ -3,10 +3,7 @@ import { z } from 'zod'
 export const PermissionAction = z.enum(['allow', 'ask', 'deny'])
 export type PermissionAction = z.infer<typeof PermissionAction>
 
-export const PermissionRule = z.union([
-  PermissionAction,
-  z.record(z.string(), PermissionAction),
-])
+export const PermissionRule = z.union([PermissionAction, z.record(z.string(), PermissionAction)])
 export type PermissionRule = z.infer<typeof PermissionRule>
 
 export const PermissionConfig = z.union([
@@ -41,9 +38,12 @@ export type PermissionConfig = z.infer<typeof PermissionConfig>
 export const ProviderModelConfig = z.object({
   name: z.string().optional(),
   tool_call: z.boolean().optional(),
+  enabled: z.boolean().default(false),
 })
+export type ProviderModelConfig = z.infer<typeof ProviderModelConfig>
 
 export const ProviderConfig = z.object({
+  enabled: z.boolean().default(false),
   npm: z.string().optional(),
   name: z.string().optional(),
   api: z.string().url().optional(),
@@ -54,7 +54,7 @@ export const ProviderConfig = z.object({
     })
     .passthrough()
     .optional(),
-  models: z.record(z.string(), ProviderModelConfig).optional(),
+  models: z.record(z.string(), ProviderModelConfig).default({}),
 })
 export type ProviderConfig = z.infer<typeof ProviderConfig>
 
@@ -83,17 +83,52 @@ export const McpServerConfig = z.object({
 })
 export type McpServerConfig = z.infer<typeof McpServerConfig>
 
-export const AppConfig = z.object({
-  model: z.string().optional(),
-  small_model: z.string().optional(),
-  provider: z.record(z.string(), ProviderConfig).default({}),
-  agent: z.record(z.string(), AgentConfig).default({}),
-  permission: PermissionConfig.default({ '*': 'ask' }),
-  mcp: z.record(z.string(), McpServerConfig).default({}),
-  executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
-})
+export const AppConfig = z
+  .object({
+    model: z.string().optional(),
+    small_model: z.string().optional(),
+    provider: z.record(z.string(), ProviderConfig).default({}),
+    agent: z.record(z.string(), AgentConfig).default({}),
+    permission: PermissionConfig.default({ '*': 'ask' }),
+    mcp: z.record(z.string(), McpServerConfig).default({}),
+    executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
+  })
+  .superRefine((config, ctx) => {
+    if (!config.model) return
+    const slash = config.model.indexOf('/')
+    if (slash <= 0 || slash === config.model.length - 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Default model must use providerID/modelID format',
+      })
+      return
+    }
+    const providerID = config.model.slice(0, slash)
+    const modelID = config.model.slice(slash + 1)
+    const provider = config.provider[providerID]
+    if (provider?.enabled !== true || provider.models[modelID]?.enabled !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Default model must belong to an enabled provider and be enabled',
+      })
+    }
+  })
 export type AppConfig = z.infer<typeof AppConfig>
 export type ExecutionMode = AppConfig['executionMode']
+
+export type ProviderConfigPatch = Partial<Omit<ProviderConfig, 'api' | 'models' | 'options'>> & {
+  api?: string | null
+  options?: ProviderConfig['options']
+  models?: Record<string, Partial<ProviderModelConfig>>
+}
+
+export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider'> & {
+  /** null explicitly clears the default across JSON/chrome messaging boundaries. */
+  model?: string | null
+  provider?: Record<string, ProviderConfigPatch>
+}
 
 export const DEFAULT_CONFIG: AppConfig = {
   provider: {},
@@ -199,7 +234,8 @@ Restrictions:
       description: 'Compress conversation context',
       mode: 'subagent',
       hidden: true,
-      prompt: 'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
+      prompt:
+        'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
       steps: 5,
       permission: { '*': 'deny' },
     },
@@ -207,7 +243,8 @@ Restrictions:
       description: 'Generate a short chat title',
       mode: 'subagent',
       hidden: true,
-      prompt: 'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
+      prompt:
+        'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
       steps: 3,
       permission: { '*': 'deny' },
     },
@@ -221,11 +258,56 @@ export function parseConfig(input: unknown): AppConfig {
   return AppConfig.parse(input)
 }
 
-export function mergeConfig(base: AppConfig, override: Partial<AppConfig>): AppConfig {
+export function isProviderEnabled(config: AppConfig, providerID: string): boolean {
+  return config.provider[providerID]?.enabled === true
+}
+
+export function isModelEnabled(config: AppConfig, providerID: string, modelID: string): boolean {
+  const provider = config.provider[providerID]
+  return provider?.enabled === true && provider.models[modelID]?.enabled === true
+}
+
+function mergeProviders(
+  base: AppConfig['provider'],
+  patch: AppConfigPatch['provider'],
+): AppConfig['provider'] {
+  const merged: Record<string, ProviderConfig> = { ...base }
+  for (const [providerID, providerPatch] of Object.entries(patch ?? {})) {
+    const current = base[providerID]
+    const normalizedPatch = {
+      ...providerPatch,
+      api: providerPatch.api === null ? undefined : providerPatch.api,
+    }
+    const models = { ...(current?.models ?? {}) }
+    for (const [modelID, modelPatch] of Object.entries(providerPatch.models ?? {})) {
+      models[modelID] = {
+        enabled: false,
+        ...models[modelID],
+        ...modelPatch,
+      }
+    }
+    merged[providerID] = {
+      enabled: false,
+      ...current,
+      ...normalizedPatch,
+      options:
+        current?.options || providerPatch.options
+          ? { ...current?.options, ...providerPatch.options }
+          : undefined,
+      models,
+    }
+  }
+  return merged
+}
+
+export function mergeConfig(base: AppConfig, override: AppConfigPatch): AppConfig {
+  const model =
+    override.model === null ? undefined : override.model !== undefined ? override.model : base.model
   return parseConfig({
     ...base,
     ...override,
-    provider: { ...base.provider, ...override.provider },
+    model,
+    provider: mergeProviders(base.provider, override.provider),
     agent: { ...base.agent, ...override.agent },
     mcp: { ...base.mcp, ...override.mcp },
     permission: override.permission ?? base.permission,

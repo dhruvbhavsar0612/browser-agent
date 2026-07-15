@@ -1,62 +1,59 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createMemoryStorage } from '../config/storage.js'
+import { MODELS_CACHE_KEY, createMemoryStorage } from '../config/storage.js'
 import { ModelsDevService, getBundledSnapshot } from './models-dev.js'
 
 describe('models.dev', () => {
-  it('ships offline snapshot with tool_call and vision flags', async () => {
-    const svc = new ModelsDevService(createMemoryStorage(), vi.fn() as unknown as typeof fetch)
-    const providers = await svc.listProviders()
-    expect(providers.length).toBeGreaterThan(0)
-    const anthropic = providers.find((p) => p.id === 'anthropic')
-    expect(anthropic?.models[0]?.toolCall).toBe(true)
-    expect(anthropic?.models.some((m) => m.vision)).toBe(true)
-    expect(anthropic?.models.some((m) => m.id.includes('claude-sonnet-4-5'))).toBe(true)
-
-    const openai = providers.find((p) => p.id === 'openai')
-    expect(openai?.models.some((m) => m.id.startsWith('gpt-5'))).toBe(true)
-
-    const google = providers.find((p) => p.id === 'google')
-    expect(google?.name).toMatch(/AI Studio|Google/i)
-    expect(google?.models.some((m) => m.id.startsWith('gemini-'))).toBe(true)
-    expect(google?.models.length).toBeGreaterThanOrEqual(10)
+  it('does not fetch or expose models before provider discovery', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch
+    const svc = new ModelsDevService(createMemoryStorage(), fetchImpl)
+    expect(await svc.getCachedProvider('openai')).toBeNull()
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('caches network catalog and respects TTL', async () => {
+  it('filters the live catalog and caches only the requested provider', async () => {
     const storage = createMemoryStorage()
     const catalog = getBundledSnapshot()
-    const fetchImpl = vi.fn(async () =>
-      Response.json({
-        ...catalog,
-        custom: {
-          name: 'Custom',
-          models: {
-            'x-1': {
-              id: 'x-1',
-              name: 'X1',
-              tool_call: true,
-              modalities: { input: ['text'] },
-              limit: { context: 8_000 },
-            },
-          },
-        },
-      }),
-    ) as unknown as typeof fetch
+    const fetchImpl = vi.fn(async () => Response.json(catalog)) as unknown as typeof fetch
 
     const svc = new ModelsDevService(storage, fetchImpl)
-    const first = await svc.listProviders({ forceRefresh: true })
-    expect(first.some((p) => p.id === 'custom')).toBe(true)
+    const first = await svc.discoverProvider('openai', { forceRefresh: true })
+    expect(first.provider.id).toBe('openai')
+    expect(first.provider.models.some((model) => model.id.startsWith('gpt-5'))).toBe(true)
+    expect(await svc.getCachedProvider('anthropic')).toBeNull()
+    const raw = await storage.getLocal<{ providers: Record<string, unknown> }>(MODELS_CACHE_KEY)
+    expect(Object.keys(raw?.providers ?? {})).toEqual(['openai'])
+    expect(JSON.stringify(raw)).not.toContain('"anthropic"')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
 
-    await svc.listProviders()
+    const cached = await svc.discoverProvider('openai')
+    expect(cached.source).toBe('cache')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to snapshot when fetch fails and cache empty', async () => {
+  it('uses only the requested snapshot provider when offline', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('network down')
     }) as unknown as typeof fetch
     const svc = new ModelsDevService(createMemoryStorage(), fetchImpl)
-    const providers = await svc.listProviders({ forceRefresh: true })
-    expect(providers.find((p) => p.id === 'openai')).toBeDefined()
+    const result = await svc.discoverProvider('anthropic', { forceRefresh: true })
+    expect(result.provider.id).toBe('anthropic')
+    expect(result.provider.models.some((model) => model.vision)).toBe(true)
+    expect(result.source).toBe('snapshot')
+    expect(result.offline).toBe(true)
+  })
+
+  it('returns a previously discovered provider cache when refresh is offline', async () => {
+    const storage = createMemoryStorage()
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(getBundledSnapshot()))
+      .mockRejectedValueOnce(new Error('offline')) as unknown as typeof fetch
+    const svc = new ModelsDevService(storage, fetchImpl)
+    await svc.discoverProvider('google', { forceRefresh: true })
+    const result = await svc.discoverProvider('google', { forceRefresh: true })
+    expect(result.provider.id).toBe('google')
+    expect(result.source).toBe('cache')
+    expect(result.offline).toBe(true)
+    expect(result.error).toContain('offline')
   })
 })

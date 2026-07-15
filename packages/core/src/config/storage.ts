@@ -7,6 +7,14 @@ export function stripSecrets<T extends Record<string, unknown>>(input: T): T {
       if (entry?.options && typeof entry.options === 'object') {
         const options = entry.options as Record<string, unknown>
         delete options.apiKey
+        if (options.headers && typeof options.headers === 'object') {
+          const headers = options.headers as Record<string, unknown>
+          for (const name of Object.keys(headers)) {
+            if (/^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(name)) {
+              delete headers[name]
+            }
+          }
+        }
       }
     }
   }

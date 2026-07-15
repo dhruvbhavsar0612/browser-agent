@@ -1,9 +1,6 @@
 import { streamText, type ModelMessage } from 'ai'
 import type { AppConfig } from '../config/schema.js'
-import {
-  getModel,
-  type GetModelOptions,
-} from '../provider/factory.js'
+import { getModel, type GetModelOptions } from '../provider/factory.js'
 
 export type ChatRole = 'user' | 'assistant'
 
@@ -28,8 +25,19 @@ export function parseModelRef(ref: string): ModelRef {
   }
 }
 
-/** Resolve provider + model from agent override or global config.model. */
-export function resolveModelRef(config: AppConfig, agentName = 'browse'): ModelRef | undefined {
+/**
+ * Resolve provider + model in session > agent override > global default order.
+ * A session pin is user-selected and must remain stable if either global
+ * setting changes later.
+ */
+export function resolveModelRef(
+  config: AppConfig,
+  agentName = 'browse',
+  sessionModel?: string,
+): ModelRef | undefined {
+  if (sessionModel) {
+    return parseModelRef(sessionModel)
+  }
   const agentModel = config.agent[agentName]?.model
   if (agentModel) {
     return { providerID: agentModel.providerID, modelID: agentModel.modelID }

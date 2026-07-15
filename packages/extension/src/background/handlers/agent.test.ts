@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ConfigService,
   CredentialVault,
+  MemorySessionStore,
   createMemoryStorage,
   createRequest,
+  getModel,
   parseStreamEvent,
   runAgentLoop,
   type StreamEvent,
@@ -46,7 +48,15 @@ describe('agent handlers', () => {
   it('streams text deltas for agent.prompt', async () => {
     const storage = createMemoryStorage()
     const config = new ConfigService(storage)
-    await config.set({ model: 'openai/gpt-4.1' })
+    await config.set({
+      model: 'openai/gpt-4.1',
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-4.1': { enabled: true } },
+        },
+      },
+    })
 
     const vault = new CredentialVault(storage)
     await vault.set('openai', 'sk-test')
@@ -129,7 +139,15 @@ describe('agent handlers', () => {
   it('aborts an active run via agent.stop', async () => {
     const storage = createMemoryStorage()
     const config = new ConfigService(storage)
-    await config.set({ model: 'openai/gpt-4.1' })
+    await config.set({
+      model: 'openai/gpt-4.1',
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-4.1': { enabled: true } },
+        },
+      },
+    })
     const vault = new CredentialVault(storage)
     await vault.set('openai', 'sk-test')
 
@@ -148,5 +166,110 @@ describe('agent handlers', () => {
 
     expect(response.type).toBe('agent.stop')
     expect(response.payload).toEqual({ ok: true })
+  })
+
+  it('uses the session model before agent override and global default', async () => {
+    const storage = createMemoryStorage()
+    const config = new ConfigService(storage)
+    await config.set({
+      model: 'openai/gpt-global',
+      provider: {
+        openai: {
+          enabled: true,
+          models: {
+            'gpt-global': { enabled: true },
+            'gpt-session': { enabled: true },
+          },
+        },
+        anthropic: {
+          enabled: true,
+          models: { 'claude-agent': { enabled: true } },
+        },
+      },
+      agent: {
+        browse: {
+          model: { providerID: 'anthropic', modelID: 'claude-agent' },
+        },
+      },
+    })
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-test')
+    await vault.set('anthropic', 'sk-test')
+    const sessions = new MemorySessionStore()
+    const session = await sessions.createSession({
+      agent: 'browse',
+      model: 'openai/gpt-session',
+    })
+    const bus = createMessageBus()
+    registerAgentHandlers(bus, { config, vault, sessions })
+    const handler = (bus as unknown as { portHandlers: Map<string, Function> }).portHandlers.get(
+      'agent.prompt',
+    )
+    const port = { postMessage: vi.fn() } as unknown as chrome.runtime.Port
+
+    await handler!(
+      createRequest('agent.prompt', {
+        sessionId: session.id,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+      port,
+    )
+
+    expect(getModel).toHaveBeenCalledWith(
+      'openai',
+      'gpt-session',
+      expect.objectContaining({ apiKey: 'sk-test' }),
+    )
+  })
+
+  it('reports a disabled session model without silently changing it', async () => {
+    const storage = createMemoryStorage()
+    const config = new ConfigService(storage)
+    await config.set({
+      model: 'openai/gpt-enabled',
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-enabled': { enabled: true } },
+        },
+      },
+    })
+    const vault = new CredentialVault(storage)
+    await vault.set('openai', 'sk-test')
+    const sessions = new MemorySessionStore()
+    const session = await sessions.createSession({
+      agent: 'browse',
+      model: 'openai/gpt-disabled',
+    })
+    const bus = createMessageBus()
+    registerAgentHandlers(bus, { config, vault, sessions })
+    const handler = (bus as unknown as { portHandlers: Map<string, Function> }).portHandlers.get(
+      'agent.prompt',
+    )
+    const events: StreamEvent[] = []
+    const port = {
+      postMessage: vi.fn((envelope: { type?: string; payload?: unknown }) => {
+        if (envelope.type === 'stream.event') {
+          events.push(parseStreamEvent(envelope.payload))
+        }
+      }),
+    } as unknown as chrome.runtime.Port
+
+    await handler!(
+      createRequest('agent.prompt', {
+        sessionId: session.id,
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+      port,
+    )
+
+    expect(events).toEqual([
+      {
+        kind: 'error',
+        message: expect.stringContaining('gpt-disabled'),
+      },
+    ])
+    expect(getModel).not.toHaveBeenCalled()
+    expect((await sessions.getSession(session.id))?.model).toBe('openai/gpt-disabled')
   })
 })

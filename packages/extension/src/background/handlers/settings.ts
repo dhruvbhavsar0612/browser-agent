@@ -7,8 +7,10 @@ import {
   fetchOpenAICompatibleModels,
   generateText,
   getModel,
-  mergeCompatibleProvider,
+  isModelEnabled,
   type Envelope,
+  type ModelDiscoverySource,
+  type ProviderDiscoveryResult,
   type ProviderInfo,
   type VaultListEntry,
 } from '@browser-agent/core'
@@ -23,6 +25,15 @@ export const SETTINGS_PROVIDERS = [
 ] as const
 
 export type SettingsProviderId = (typeof SETTINGS_PROVIDERS)[number]
+
+const MODELS_DEV_PROVIDERS = new Set<string>(['anthropic', 'openai', 'google', 'openrouter'])
+
+export type DiscoveryStatus = {
+  fetchedAt: number
+  source: ModelDiscoverySource
+  offline: boolean
+  error?: string
+}
 
 export function parseModelRef(model: string): { providerID: string; modelID: string } {
   const slash = model.indexOf('/')
@@ -43,7 +54,7 @@ async function resolveModelOptions(
   providerID: string,
   vault: CredentialVault,
   config: ConfigService,
-): Promise<{ apiKey?: string; baseURL?: string; name?: string }> {
+): Promise<{ apiKey?: string; baseURL?: string; name?: string; headers?: Record<string, string> }> {
   const cred = await vault.get(providerID)
   const cfg = await config.get()
   const providerCfg = cfg.provider[providerID]
@@ -53,48 +64,114 @@ async function resolveModelOptions(
     apiKey: cred ? credentialSecretToApiKey(cred.secret, cred.type) : undefined,
     baseURL: providerCfg?.api ?? options?.baseURL,
     name: providerCfg?.name ?? providerID,
+    headers: providerCfg?.options?.headers,
   }
 }
 
 export async function loadCompatibleModels(deps: {
+  models: ModelsDevService
   vault: CredentialVault
   config: ConfigService
-}): Promise<{ provider: ProviderInfo | null; error?: string }> {
-  const options = await resolveModelOptions('openai-compatible', deps.vault, deps.config)
+  providerID?: string
+  forceRefresh?: boolean
+}): Promise<ProviderDiscoveryResult> {
+  const providerID = deps.providerID ?? 'openai-compatible'
+  const cached = await deps.models.getCachedProvider(providerID)
+  if (cached && !deps.forceRefresh) return cached
+  const options = await resolveModelOptions(providerID, deps.vault, deps.config)
   const baseURL = options.baseURL?.trim()
   if (!baseURL) {
-    return { provider: null }
+    throw new Error(`Provider "${providerID}" needs a base URL before discovery`)
   }
 
   try {
     const provider = await fetchOpenAICompatibleModels({
       baseURL,
       apiKey: options.apiKey,
-      name: options.name ?? 'OpenAI-compatible',
+      headers: options.headers,
+      providerID,
+      name: options.name ?? providerID,
     })
-    return { provider }
+    const fetchedAt = Date.now()
+    await deps.models.cacheProvider(provider, { fetchedAt, source: 'network' })
+    return { provider, fetchedAt, source: 'network', offline: false }
   } catch (err) {
-    return {
-      provider: null,
-      error: err instanceof Error ? err.message : String(err),
+    const error = err instanceof Error ? err.message : String(err)
+    if (cached) {
+      return {
+        ...cached,
+        source: 'cache',
+        offline: true,
+        error,
+      }
     }
+    throw err
   }
 }
 
-export async function listMergedProviders(
+export async function listConnectedProviders(deps: {
+  models: ModelsDevService
+  vault: CredentialVault
+  config: ConfigService
+}): Promise<{ providers: ProviderInfo[]; discovery: Record<string, DiscoveryStatus> }> {
+  const config = await deps.config.get()
+  const credentials = await deps.vault.list()
+  const credentialProviders = new Set(credentials.map((entry) => entry.providerId))
+  const providers: ProviderInfo[] = []
+  const discovery: Record<string, DiscoveryStatus> = {}
+
+  for (const [providerID, providerConfig] of Object.entries(config.provider)) {
+    if (!providerConfig.enabled) continue
+    const connected = MODELS_DEV_PROVIDERS.has(providerID)
+      ? credentialProviders.has(providerID)
+      : Boolean(
+          providerConfig.api ??
+          (providerConfig.options as { baseURL?: string } | undefined)?.baseURL,
+        )
+    if (!connected) continue
+    const cached = await deps.models.getCachedProvider(providerID)
+    if (!cached) continue
+    providers.push(cached.provider)
+    discovery[providerID] = {
+      fetchedAt: cached.fetchedAt,
+      source: cached.source,
+      offline: cached.offline,
+      error: cached.error,
+    }
+  }
+
+  return { providers, discovery }
+}
+
+export async function discoverProviderModels(
+  providerID: string,
   deps: {
     models: ModelsDevService
     vault: CredentialVault
     config: ConfigService
   },
   opts?: { forceRefresh?: boolean },
-): Promise<{ providers: ProviderInfo[]; compatibleError?: string }> {
-  const catalog = await deps.models.listProviders({ forceRefresh: opts?.forceRefresh })
-  const { provider, error } = await loadCompatibleModels(deps)
-  return {
-    providers: mergeCompatibleProvider(catalog, provider),
-    compatibleError: error,
+): Promise<ProviderDiscoveryResult> {
+  const config = await deps.config.get()
+  const providerConfig = config.provider[providerID]
+  if (!providerConfig?.enabled) {
+    throw new Error(`Enable provider "${providerID}" before discovering models`)
   }
+
+  if (MODELS_DEV_PROVIDERS.has(providerID)) {
+    if (!(await deps.vault.get(providerID))) {
+      throw new Error(`Connect provider "${providerID}" before discovering models`)
+    }
+    return deps.models.discoverProvider(providerID, {
+      forceRefresh: opts?.forceRefresh,
+    })
+  }
+
+  return loadCompatibleModels({
+    ...deps,
+    providerID,
+    forceRefresh: opts?.forceRefresh,
+  })
 }
 
 export async function runModelTest(
@@ -103,6 +180,10 @@ export async function runModelTest(
   deps: { vault: CredentialVault; config: ConfigService },
 ): Promise<{ ok: boolean; text?: string; error?: string }> {
   try {
+    const appConfig = await deps.config.get()
+    if (!isModelEnabled(appConfig, providerID, modelID)) {
+      throw new Error(`Model "${providerID}/${modelID}" is not enabled`)
+    }
     const options = await resolveModelOptions(providerID, deps.vault, deps.config)
     const model = await getModel(providerID, modelID, options)
     const result = await generateText({
@@ -164,15 +245,25 @@ export function registerSettingsHandlers(bus: MessageBus, deps: SettingsHandlerD
       return createResponse(message, 'vault.clear', { ok: true, entries: [] })
     })
     .on('models.list', async (message) => {
-      const payload = (message.payload ?? {}) as { forceRefresh?: boolean }
-      const { providers, compatibleError } = await listMergedProviders(
-        { models, vault, config },
-        { forceRefresh: payload.forceRefresh },
-      )
+      const { providers, discovery } = await listConnectedProviders({ models, vault, config })
       return createResponse(message, 'models.list', {
         providers,
-        compatibleError: compatibleError ?? null,
+        discovery,
       })
+    })
+    .on('models.discover', async (message) => {
+      const payload = (message.payload ?? {}) as {
+        providerId?: string
+        forceRefresh?: boolean
+      }
+      const providerId = payload.providerId?.trim()
+      if (!providerId) throw new Error('providerId is required')
+      const result = await discoverProviderModels(
+        providerId,
+        { models, vault, config },
+        { forceRefresh: payload.forceRefresh ?? true },
+      )
+      return createResponse(message, 'models.discover', result)
     })
     .on('model.test', async (message) => {
       const payload = (message.payload ?? {}) as {

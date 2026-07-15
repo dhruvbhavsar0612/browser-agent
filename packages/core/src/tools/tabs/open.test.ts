@@ -1,15 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { tabsOpenTool } from './open.js'
 import { createFakeBrowserBridge, toolCtx } from './fake-bridge.js'
 
 describe('tabs_open', () => {
   it('opens a tab at the given url', async () => {
     const browser = createFakeBrowserBridge()
+    const open = vi.spyOn(browser, 'tabsOpen')
     const result = await tabsOpenTool.execute(
       { url: 'https://new.example/page' },
-      toolCtx(browser),
+      toolCtx(browser, { sessionId: 'sess-abc' }),
     )
 
+    expect(open).toHaveBeenCalledWith('https://new.example/page', {
+      background: undefined,
+      sessionId: 'sess-abc',
+    })
     expect(result).toEqual({
       tab: {
         id: 3,

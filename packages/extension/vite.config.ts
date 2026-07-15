@@ -9,6 +9,9 @@ export default defineConfig({
     // Service workers have no `document`; Vite's modulepreload polyfill must stay off.
     modulePreload: { polyfill: false },
     rollupOptions: {
+      input: {
+        offscreen: 'src/offscreen/offscreen.html',
+      },
       preserveEntrySignatures: 'exports-only',
     },
   },

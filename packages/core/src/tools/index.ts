@@ -110,5 +110,6 @@ export {
   type SelectOptions,
   type TabInfo,
   type TypeOptions,
+  type TypeResult,
 } from './browser.js'
 export { pageUrlPermissionPatterns } from './page-url-pattern.js'

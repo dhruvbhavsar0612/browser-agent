@@ -8,12 +8,15 @@ import {
   actSelect,
   actType,
 } from './act.js'
+import { showAgentIndicator } from './indicator.js'
 import {
   captureTabScreenshot,
   navigateTab,
   toTabInfo,
   waitForTabLoad,
 } from './navigate-screenshot.js'
+import { clearRichTextDirty } from './rich-text-lock.js'
+import { addTabToSessionGroup } from './tab-group.js'
 
 export type ChromeBridgeOverrides = Partial<BrowserBridge>
 
@@ -36,7 +39,12 @@ export function createBrowserBridge(overrides: ChromeBridgeOverrides = {}): Brow
     },
     tabsOpen: async (url, opts) => {
       const tab = await chrome.tabs.create({ url, active: !opts?.background })
-      return toTabInfo(tab)
+      const info = toTabInfo(tab)
+      if (opts?.sessionId && info.id != null) {
+        await addTabToSessionGroup(opts.sessionId, info.id, opts.groupTitle)
+        void showAgentIndicator(info.id)
+      }
+      return info
     },
     tabsClose: async (tabId) => {
       await chrome.tabs.remove(tabId)
@@ -50,7 +58,10 @@ export function createBrowserBridge(overrides: ChromeBridgeOverrides = {}): Brow
         return null
       }
     },
-    navigate: navigateTab,
+    navigate: async (tabId, url) => {
+      clearRichTextDirty(tabId)
+      return navigateTab(tabId, url)
+    },
     waitForLoad: waitForTabLoad,
     pageRead: generateA11yTree,
     pageScreenshot: captureTabScreenshot,

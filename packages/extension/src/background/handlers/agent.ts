@@ -20,7 +20,9 @@ import {
 } from '@browser-agent/core'
 import { createBrowserBridge } from '../browser/bridge.js'
 import { detachAll } from '../browser/debugger.js'
+import { hideAllAgentIndicators, showAgentIndicator } from '../browser/indicator.js'
 import { bindSessionTab, getBoundTabId } from '../browser/session-tab.js'
+import { createGroupForSession } from '../browser/tab-group.js'
 import { startKeepalive, stopKeepalive, type MessageBus } from '../bus.js'
 
 const browserBridge = createBrowserBridge()
@@ -52,6 +54,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
     activeRuns.get(runId)?.abort()
     activeRuns.delete(runId)
     void detachAll()
+    void hideAllAgentIndicators()
     return createResponse(message, 'agent.stop', { ok: true })
   })
 
@@ -141,8 +144,13 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       const sessionId = payload.sessionId ?? requestId
       if (payload.tabId != null) {
         bindSessionTab(sessionId, payload.tabId)
+        void createGroupForSession(sessionId, payload.tabId)
+        void showAgentIndicator(payload.tabId)
       }
       const boundTabId = payload.tabId ?? getBoundTabId(sessionId)
+      if (boundTabId != null && payload.tabId == null) {
+        void showAgentIndicator(boundTabId)
+      }
       const availableTools = filterToolsByPermission(listTools(), ruleset)
 
       let systemPrompt = agentInfo?.prompt
@@ -212,6 +220,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
     } finally {
       activeRuns.delete(requestId)
       stopKeepalive()
+      void hideAllAgentIndicators()
     }
   })
 }

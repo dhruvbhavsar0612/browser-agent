@@ -69,6 +69,19 @@
   justify-content: flex-end;
 }
 
+.settings-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.settings-enable input,
+.settings-model-row input {
+  accent-color: var(--accent);
+}
+
 .settings-badge {
   font-size: 10px;
   text-transform: uppercase;
@@ -222,6 +235,51 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
+}
+
+.settings-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+
+.settings-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+}
+
+.settings-model-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 6px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.settings-model-row:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.settings-model-row input {
+  margin-top: 2px;
+  flex: none;
+}
+
+.settings-offline {
+  color: var(--accent);
 }
 
 .settings-rules {

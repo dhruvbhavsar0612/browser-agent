@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createRequest,
+  type AppConfigType,
   type ChatMessage,
   type PermissionReply,
+  type ProviderInfo,
   type SessionRecord,
   type StreamEvent,
 } from '@browser-agent/core'
@@ -52,6 +54,11 @@ export function ChatView({
   const [error, setError] = useState<string | null>(null)
   const [permissionQueue, setPermissionQueue] = useState<PermissionAskRequest[]>([])
   const [permissionBusy, setPermissionBusy] = useState(false)
+  const [config, setConfig] = useState<AppConfigType | null>(null)
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [session, setSession] = useState<SessionRecord | null>(null)
+  const [selectedModel, setSelectedModel] = useState('')
+  const [loadingModels, setLoadingModels] = useState(true)
   const [connectionStatus, setConnectionStatus] = useState<
     'connected' | 'disconnected' | 'reconnecting'
   >('connected')
@@ -61,6 +68,28 @@ export function ChatView({
   const activeRequestIdRef = useRef<string | null>(null)
   const streamingRef = useRef(false)
   const sessionIdRef = useRef(sessionId)
+
+  const enabledModels = useMemo(() => {
+    if (!config) return []
+    return providers
+      .filter((provider) => config.provider[provider.id]?.enabled)
+      .map((provider) => ({
+        provider,
+        models: provider.models
+          .filter((model) => config.provider[provider.id]?.models[model.id]?.enabled)
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .filter(({ models }) => models.length > 0)
+  }, [config, providers])
+
+  const selectedModelEnabled = useMemo(
+    () =>
+      !selectedModel ||
+      enabledModels.some(({ provider, models }) =>
+        models.some((model) => `${provider.id}/${model.id}` === selectedModel),
+      ),
+    [enabledModels, selectedModel],
+  )
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -77,6 +106,48 @@ export function ChatView({
   useEffect(() => {
     sessionIdRef.current = sessionId
   }, [sessionId])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingModels(true)
+    void Promise.all([
+      sendRequest('config.get'),
+      sendRequest('models.list'),
+      sendRequest('session.list'),
+    ])
+      .then(([configResponse, modelsResponse, sessionsResponse]) => {
+        if (cancelled) return
+        if (configResponse.type === 'error' || modelsResponse.type === 'error') {
+          throw new Error('Could not load enabled models')
+        }
+        const nextConfig = configResponse.payload as AppConfigType
+        const nextProviders =
+          (modelsResponse.payload as { providers?: ProviderInfo[] })?.providers ?? []
+        const sessions = (sessionsResponse.payload ?? []) as SessionRecord[]
+        const activeSession = sessionId
+          ? (sessions.find((item) => item.id === sessionId) ?? null)
+          : null
+        setConfig(nextConfig)
+        setProviders(nextProviders)
+        setSession(activeSession)
+        // New chats inherit only the global default. Existing chats retain
+        // their pin; legacy unpinned sessions fall back at runtime.
+        const agentModel = nextConfig.agent[agent]?.model
+        const fallback = agentModel
+          ? `${agentModel.providerID}/${agentModel.modelID}`
+          : (nextConfig.model ?? '')
+        setSelectedModel(activeSession?.model ?? (!sessionId ? (nextConfig.model ?? '') : fallback))
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agent, sessionId])
 
   const appendAssistantEvent = useCallback((event: StreamEvent) => {
     setMessages((prev) => {
@@ -235,28 +306,42 @@ export function ChatView({
         const listed = await sendRequest('session.list')
         const sessions = (listed.payload ?? []) as SessionRecord[]
         const found = sessions.find((item) => item.id === existingId)
-        if (found) return found
+        if (found) {
+          setSession(found)
+          return found
+        }
       }
 
       const created = await sendRequest('session.create', {
         agent,
         title: titleFromPrompt(firstMessage),
+        model: selectedModel || undefined,
       })
       if (created.type === 'error' || !created.payload) {
         throw new Error('Could not create chat session')
       }
       const session = created.payload as SessionRecord
       sessionIdRef.current = session.id
+      setSession(session)
+      setSelectedModel(session.model ?? '')
       onSessionChange(session)
       onSessionsRefresh()
       return session
     },
-    [agent, onSessionChange, onSessionsRefresh],
+    [agent, onSessionChange, onSessionsRefresh, selectedModel],
   )
 
   const send = useCallback(() => {
     const text = input.trim()
-    if (!text || streaming || loadingSession) return
+    if (
+      !text ||
+      streaming ||
+      loadingSession ||
+      loadingModels ||
+      !selectedModel ||
+      !selectedModelEnabled
+    )
+      return
 
     const userMessage: UiMessage = { id: createId(), role: 'user', content: text }
     const assistantMessage: UiMessage = {
@@ -314,7 +399,18 @@ export function ChatView({
         setError(err instanceof Error ? err.message : String(err))
       }
     })()
-  }, [agent, ensureSession, input, loadingSession, messages, onSessionsRefresh, streaming])
+  }, [
+    agent,
+    ensureSession,
+    input,
+    loadingSession,
+    loadingModels,
+    messages,
+    onSessionsRefresh,
+    selectedModel,
+    selectedModelEnabled,
+    streaming,
+  ])
 
   const replyPermission = useCallback(
     async (response: PermissionReply) => {
@@ -352,6 +448,30 @@ export function ChatView({
     setPermissionQueue([])
   }, [])
 
+  const switchModel = useCallback(
+    async (model: string) => {
+      if (!model || streaming) return
+      setError(null)
+      if (!sessionIdRef.current) {
+        setSelectedModel(model)
+        return
+      }
+      const response = await sendRequest('session.update', {
+        id: sessionIdRef.current,
+        model,
+      })
+      if (response.type === 'error' || !response.payload) {
+        throw new Error('Could not update this chat model')
+      }
+      const updated = response.payload as SessionRecord
+      setSession(updated)
+      setSelectedModel(updated.model ?? model)
+      onSessionChange(updated)
+      onSessionsRefresh()
+    },
+    [onSessionChange, onSessionsRefresh, streaming],
+  )
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -361,6 +481,56 @@ export function ChatView({
 
   return (
     <div className="chat">
+      <div className="chat-model-header">
+        <label className="chat-model-picker">
+          <span>Model</span>
+          <select
+            value={selectedModel}
+            disabled={loadingModels || streaming || enabledModels.length === 0}
+            onChange={(event) =>
+              void switchModel(event.target.value).catch((err) =>
+                setError(err instanceof Error ? err.message : String(err)),
+              )
+            }
+          >
+            {!selectedModel ? (
+              <option value="">
+                {loadingModels
+                  ? 'Loading models…'
+                  : enabledModels.length === 0
+                    ? 'No enabled models'
+                    : 'Choose a model'}
+              </option>
+            ) : null}
+            {selectedModel && !selectedModelEnabled ? (
+              <option value={selectedModel} disabled>
+                {selectedModel} (disabled or disconnected)
+              </option>
+            ) : null}
+            {enabledModels.map(({ provider, models }) => (
+              <optgroup key={provider.id} label={provider.name}>
+                {models.map((model) => (
+                  <option key={`${provider.id}/${model.id}`} value={`${provider.id}/${model.id}`}>
+                    {model.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <span className="chat-model-scope">
+          {session?.model
+            ? 'Pinned to this chat'
+            : sessionId
+              ? 'Using fallback'
+              : 'New chat default'}
+        </span>
+      </div>
+      {selectedModel && !selectedModelEnabled ? (
+        <div className="chat-model-warning">
+          This chat’s model is disabled, disconnected, or unavailable. Choose an enabled model.
+        </div>
+      ) : null}
       <div className="chat-messages" aria-live="polite">
         {loadingSession ? (
           <div className="chat-empty">
@@ -373,8 +543,8 @@ export function ChatView({
             </div>
             <h2>What can I help with?</h2>
             <p>
-              Configure an API key in Settings, pick a model, then ask the agent to browse, read, or
-              act on the current tab.
+              Connect and enable a provider in Settings, enable a model, then ask the agent to
+              browse, read, or act on the current tab.
             </p>
           </div>
         ) : (
@@ -491,7 +661,13 @@ export function ChatView({
               <button
                 type="button"
                 className="chat-btn chat-btn-send"
-                disabled={!input.trim() || loadingSession}
+                disabled={
+                  !input.trim() ||
+                  loadingSession ||
+                  loadingModels ||
+                  !selectedModel ||
+                  !selectedModelEnabled
+                }
                 onClick={send}
               >
                 Send

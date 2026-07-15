@@ -2,6 +2,7 @@ import {
   ConfigService,
   CredentialVault,
   ModelsDevService,
+  MODELS_CACHE_KEY,
   createMemoryStorage,
   createRequest,
   generateText,
@@ -49,14 +50,13 @@ describe('settings handlers', () => {
   const storage = createMemoryStorage()
   const vault = new CredentialVault(storage)
   const config = new ConfigService(storage)
-  const models = new ModelsDevService(storage, async () =>
-    Response.json(getBundledSnapshot()),
-  )
+  const models = new ModelsDevService(storage, async () => Response.json(getBundledSnapshot()))
   const bus = createMessageBus()
 
   beforeEach(async () => {
     await vault.clear()
     await config.reset()
+    await storage.removeLocal(MODELS_CACHE_KEY)
     generateTextMock.mockReset()
     registerSettingsHandlers(bus, { vault, models, config })
   })
@@ -99,15 +99,36 @@ describe('settings handlers', () => {
     expect(clearRes.payload).toEqual({ ok: true, entries: [] })
   })
 
-  it('returns models catalog from models.list', async () => {
+  it('returns no models before a provider is enabled and connected', async () => {
     const res = await dispatchSettingsMessage(bus, createRequest('models.list'))
     expect(res.type).toBe('models.list')
     const providers = (res.payload as { providers: { id: string }[] }).providers
-    expect(providers.some((p) => p.id === 'openai')).toBe(true)
-    expect(providers.some((p) => p.id === 'anthropic')).toBe(true)
+    expect(providers).toEqual([])
   })
 
-  it('merges openai-compatible /models into models.list when base URL is set', async () => {
+  it('gates discovery and exposes only the requested connected provider', async () => {
+    await expect(
+      dispatchSettingsMessage(bus, createRequest('models.discover', { providerId: 'openai' })),
+    ).rejects.toThrow(/Enable provider/)
+
+    await config.set({ provider: { openai: { enabled: true } } })
+    await expect(
+      dispatchSettingsMessage(bus, createRequest('models.discover', { providerId: 'openai' })),
+    ).rejects.toThrow(/Connect provider/)
+
+    await vault.set('openai', 'sk-live')
+    const discovered = await dispatchSettingsMessage(
+      bus,
+      createRequest('models.discover', { providerId: 'openai' }),
+    )
+    expect((discovered.payload as { provider: { id: string } }).provider.id).toBe('openai')
+
+    const listed = await dispatchSettingsMessage(bus, createRequest('models.list'))
+    const providers = (listed.payload as { providers: { id: string }[] }).providers
+    expect(providers.map((provider) => provider.id)).toEqual(['openai'])
+  })
+
+  it('discovers openai-compatible models from /models when enabled and configured', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input)
       if (url.endsWith('/models')) {
@@ -124,19 +145,24 @@ describe('settings handlers', () => {
 
     await config.set({
       provider: {
-        'openai-compatible': { api: 'https://opencode.ai/zen/go/v1' },
+        'openai-compatible': {
+          enabled: true,
+          api: 'https://opencode.ai/zen/go/v1',
+        },
       },
     })
     await vault.set('openai-compatible', 'sk-zen')
 
-    const res = await dispatchSettingsMessage(bus, createRequest('models.list'))
-    expect(res.type).toBe('models.list')
-    const payload = res.payload as {
-      providers: { id: string; models: { id: string }[] }[]
-      compatibleError: string | null
-    }
-    expect(payload.compatibleError).toBeNull()
-    const compatible = payload.providers.find((p) => p.id === 'openai-compatible')
+    const discovered = await dispatchSettingsMessage(
+      bus,
+      createRequest('models.discover', { providerId: 'openai-compatible' }),
+    )
+    expect(discovered.type).toBe('models.discover')
+    const compatible = (
+      discovered.payload as {
+        provider: { id: string; models: { id: string }[] }
+      }
+    ).provider
     expect(compatible?.models.map((m) => m.id).sort()).toEqual(['glm-5', 'minimax-m3'])
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://opencode.ai/zen/go/v1/models',
@@ -150,6 +176,14 @@ describe('settings handlers', () => {
 
   it('runs model.test using vault key and generateText', async () => {
     await vault.set('openai', 'sk-live')
+    await config.set({
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-4.1': { enabled: true } },
+        },
+      },
+    })
     generateTextMock.mockResolvedValue({ text: 'pong' } as never)
 
     const res = await dispatchSettingsMessage(
@@ -168,7 +202,15 @@ describe('settings handlers', () => {
   })
 
   it('uses config.model when model.test has no payload', async () => {
-    await config.set({ model: 'openai/gpt-4.1-mini' })
+    await config.set({
+      model: 'openai/gpt-4.1-mini',
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-4.1-mini': { enabled: true } },
+        },
+      },
+    })
     await vault.set('openai', 'sk-live')
     generateTextMock.mockResolvedValue({ text: 'ok' } as never)
 
@@ -177,6 +219,14 @@ describe('settings handlers', () => {
   })
 
   it('returns structured error from runModelTest without throwing', async () => {
+    await config.set({
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-4.1': { enabled: true } },
+        },
+      },
+    })
     const result = await runModelTest('openai', 'gpt-4.1', { vault, config })
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/Missing API key/)

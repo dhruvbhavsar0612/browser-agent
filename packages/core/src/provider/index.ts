@@ -20,7 +20,13 @@ export {
   getBundledSnapshot,
   catalogToProviders,
 } from './models-dev.js'
-export type { ModelsCatalog, ModelsCacheEntry } from './models-dev.js'
+export type {
+  ModelsCatalog,
+  ModelsCacheEntry,
+  ProviderModelsCacheEntry,
+  ProviderDiscoveryResult,
+  ModelDiscoverySource,
+} from './models-dev.js'
 
 export {
   BUNDLED_PROVIDERS,

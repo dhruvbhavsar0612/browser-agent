@@ -48,6 +48,24 @@ describe('agent chat', () => {
     })
   })
 
+  it('prefers a session pin over agent and global models', () => {
+    const config = {
+      ...DEFAULT_CONFIG,
+      model: 'openai/gpt-global',
+      agent: {
+        ...DEFAULT_CONFIG.agent,
+        browse: {
+          ...DEFAULT_CONFIG.agent.browse,
+          model: { providerID: 'anthropic', modelID: 'claude-agent' },
+        },
+      },
+    }
+    expect(resolveModelRef(config, 'browse', 'openrouter/openai/gpt-session')).toEqual({
+      providerID: 'openrouter',
+      modelID: 'openai/gpt-session',
+    })
+  })
+
   it('returns undefined when no model configured', () => {
     expect(resolveModelRef(DEFAULT_CONFIG)).toBeUndefined()
   })

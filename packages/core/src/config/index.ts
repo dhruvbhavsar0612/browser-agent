@@ -8,11 +8,16 @@ export {
   DEFAULT_CONFIG,
   parseConfig,
   mergeConfig,
+  isProviderEnabled,
+  isModelEnabled,
 } from './schema.js'
 export type {
   AppConfig as AppConfigType,
+  AppConfigPatch,
   AgentConfig as AgentConfigType,
   ProviderConfig as ProviderConfigType,
+  ProviderConfigPatch,
+  ProviderModelConfig,
   PermissionConfig as PermissionConfigType,
   PermissionAction as PermissionActionType,
   McpServerConfig as McpServerConfigType,

@@ -26,6 +26,7 @@ export const MessageType = z.enum([
   'oauth.complete',
   'oauth.disconnect',
   'models.list',
+  'models.discover',
   'model.test',
   'agent.prompt',
   'agent.stop',

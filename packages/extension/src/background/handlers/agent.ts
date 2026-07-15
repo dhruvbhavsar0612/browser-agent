@@ -7,6 +7,7 @@ import {
   filterToolsByPermission,
   getAgent,
   getModel,
+  isModelEnabled,
   listTools,
   resolveModelRef,
   runAgentLoop,
@@ -93,12 +94,24 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       const appConfig = await deps.config.get()
       const agentName = payload.agent ?? 'browse'
       const agentInfo = getAgent(agentName, appConfig)
-      const modelRef = resolveModelRef(appConfig, agentName)
+      const session =
+        payload.sessionId && deps.sessions
+          ? await deps.sessions.getSession(payload.sessionId)
+          : null
+      const modelRef = resolveModelRef(appConfig, agentName, session?.model)
 
       if (!modelRef) {
         push({
           kind: 'error',
           message: 'No model selected. Choose a default model in Settings.',
+        })
+        port.postMessage(createResponse(message, 'agent.prompt', { ok: false }))
+        return
+      }
+      if (!isModelEnabled(appConfig, modelRef.providerID, modelRef.modelID)) {
+        push({
+          kind: 'error',
+          message: `The selected model "${modelRef.providerID}/${modelRef.modelID}" is disabled. Enable it in Settings or choose another model for this chat.`,
         })
         port.postMessage(createResponse(message, 'agent.prompt', { ok: false }))
         return
@@ -155,7 +168,8 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       if (boundTabId != null) {
         const tab = await browserBridge.tabsGet(boundTabId)
         if (tab) {
-          systemPrompt = `${systemPrompt ?? ''}\n\nActive tab: "${tab.title}" — ${tab.url} (tabId ${tab.id})`.trim()
+          systemPrompt =
+            `${systemPrompt ?? ''}\n\nActive tab: "${tab.title}" — ${tab.url} (tabId ${tab.id})`.trim()
         }
       }
 

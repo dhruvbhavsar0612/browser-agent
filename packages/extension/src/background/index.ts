@@ -5,6 +5,8 @@ import {
   createResponse,
   IndexedDbSessionStore,
   ModelsDevService,
+  isModelEnabled,
+  parseModelRef,
   type Envelope,
 } from '@browser-agent/core'
 import { createMessageBus, runDemoStream } from './bus.js'
@@ -44,10 +46,18 @@ bus
   )
   .on('session.create', async (message) => {
     const payload = (message.payload ?? {}) as { title?: string; agent?: string; model?: string }
+    const appConfig = await config.get()
+    const model = payload.model ?? appConfig.model
+    if (model) {
+      const ref = parseModelRef(model)
+      if (!isModelEnabled(appConfig, ref.providerID, ref.modelID)) {
+        throw new Error(`Model "${model}" is not enabled`)
+      }
+    }
     const session = await sessions.createSession({
       title: payload.title,
       agent: payload.agent ?? 'browse',
-      model: payload.model,
+      model,
     })
     return createResponse(message, 'session.create', session)
   })
@@ -83,8 +93,5 @@ registerAgentHandlers(bus, { config, vault, sessions })
 registerOAuthHandlers(bus, { vault })
 
 bus.listen()
-
-// Warm models.dev cache in background (non-blocking)
-void models.listProviders().catch(() => undefined)
 
 console.info('[browser-agent] service worker ready')

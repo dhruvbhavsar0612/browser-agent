@@ -3,6 +3,8 @@ import type { TextStreamPart, ToolSet } from 'ai'
 import type { StreamEvent } from '../messaging/index.js'
 import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
+  REDACTED_THINK_CLOSE,
+  REDACTED_THINK_OPEN,
   THINK_CLOSE,
   THINK_OPEN,
   ThinkTagParser,
@@ -218,12 +220,30 @@ describe('processFullStream', () => {
     expect(result.stopped).toBe(true)
   })
 
-  it('strips redacted_thinking tags from text into reasoning-delta', async () => {
+  it('strips <think> tags from text into reasoning-delta', async () => {
     const { events } = await collect([
       {
         type: 'text-delta',
         id: 't1',
         text: `Hello ${THINK_OPEN}secret plan${THINK_CLOSE} world`,
+      },
+      { type: 'text-end', id: 't1' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    expect(events).toEqual([
+      { kind: 'text-delta', text: 'Hello ' },
+      { kind: 'reasoning-delta', text: 'secret plan' },
+      { kind: 'text-delta', text: ' world' },
+    ])
+  })
+
+  it('strips redacted_thinking tags from text into reasoning-delta', async () => {
+    const { events } = await collect([
+      {
+        type: 'text-delta',
+        id: 't1',
+        text: `Hello ${REDACTED_THINK_OPEN}secret plan${REDACTED_THINK_CLOSE} world`,
       },
       { type: 'text-end', id: 't1' },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
@@ -278,6 +298,26 @@ describe('ThinkTagParser', () => {
     const partialClose = THINK_CLOSE.slice(0, -1)
     parser.process(`${partialClose}`, emit)
     parser.process(`${THINK_CLOSE.slice(-1)}y`, emit)
+    parser.flush(emit)
+
+    expect(events).toEqual([
+      { kind: 'reasoning', text: 'x' },
+      { kind: 'text', text: 'y' },
+    ])
+  })
+
+  it('parses redacted_thinking partial closing tags', () => {
+    const events: Array<{ kind: 'text' | 'reasoning'; text: string }> = []
+    const parser = new ThinkTagParser()
+    const emit = {
+      text: (text: string) => events.push({ kind: 'text', text }),
+      reasoning: (text: string) => events.push({ kind: 'reasoning', text }),
+    }
+
+    parser.process(`${REDACTED_THINK_OPEN}x`, emit)
+    const partialClose = REDACTED_THINK_CLOSE.slice(0, -1)
+    parser.process(`${partialClose}`, emit)
+    parser.process(`${REDACTED_THINK_CLOSE.slice(-1)}y`, emit)
     parser.flush(emit)
 
     expect(events).toEqual([

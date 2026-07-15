@@ -51,7 +51,7 @@
 | [DHR-56](https://linear.app/dhruvsprojects/issue/DHR-56) | page_read + grep | 58, 57, 53 |
 | [DHR-59](https://linear.app/dhruvsprojects/issue/DHR-59) | navigate + screenshot | 57, 61 |
 
-### Sprint 4 — Browser Act
+### Sprint 4 — Browser Act (+ UX parallel)
 | ID | Title | Blocked by |
 |----|-------|------------|
 | [DHR-61](https://linear.app/dhruvsprojects/issue/DHR-61) | CDP debugger | 51 |
@@ -59,6 +59,11 @@
 | [DHR-69](https://linear.app/dhruvsprojects/issue/DHR-69) | Clipboard safety | 66 |
 | [DHR-68](https://linear.app/dhruvsprojects/issue/DHR-68) | Visual indicator | 45 |
 | [DHR-65](https://linear.app/dhruvsprojects/issue/DHR-65) | Tab groups | 57 |
+| [DHR-77](https://linear.app/dhruvsprojects/issue/DHR-77) | Side panel UX epic | — |
+| [DHR-78](https://linear.app/dhruvsprojects/issue/DHR-78) | Markdown rendering | 77 |
+| [DHR-79](https://linear.app/dhruvsprojects/issue/DHR-79) | Reasoning / thinking UI | 77 |
+| [DHR-80](https://linear.app/dhruvsprojects/issue/DHR-80) | Light/dark theme redesign | 77 |
+| [DHR-81](https://linear.app/dhruvsprojects/issue/DHR-81) | Collapsible tool inspector | 77 |
 
 ### Sprint 5 — Permissions
 | ID | Title | Blocked by |

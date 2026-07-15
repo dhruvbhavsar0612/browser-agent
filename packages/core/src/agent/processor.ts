@@ -3,9 +3,20 @@ import type { StreamEvent } from '../messaging/index.js'
 
 export const DEFAULT_TOOL_RESULT_MAX_CHARS = 32_000
 
-const THINK_TAG = 'redacted' + '_' + 'thinking'
-export const THINK_OPEN = '<' + THINK_TAG + '>'
-export const THINK_CLOSE = '</' + THINK_TAG + '>'
+/** OpenCode / MiniMax-style tags (primary live format). */
+export const THINK_OPEN = '<' + 'think' + '>'
+export const THINK_CLOSE = '</' + 'think' + '>'
+
+/** Alternate tags some providers emit. */
+const REDACTED_TAG = 'redacted' + '_' + 'thinking'
+export const REDACTED_THINK_OPEN = '<' + REDACTED_TAG + '>'
+export const REDACTED_THINK_CLOSE = '</' + REDACTED_TAG + '>'
+
+const THINK_OPEN_TAGS = [THINK_OPEN, REDACTED_THINK_OPEN] as const
+const THINK_CLOSE_BY_OPEN: Record<string, string> = {
+  [THINK_OPEN]: THINK_CLOSE,
+  [REDACTED_THINK_OPEN]: REDACTED_THINK_CLOSE,
+}
 
 export type DurablePart =
   | { type: 'text'; content: string }
@@ -43,9 +54,13 @@ type ThinkEmit = {
   reasoning: (chunk: string) => void
 }
 
-/** Strips `<think>…</think>` from text deltas into reasoning. */
+/**
+ * Strips think tags from text deltas into reasoning.
+ * Supports both `<think>…</think>` and `<redacted_thinking>…</redacted_thinking>`.
+ */
 export class ThinkTagParser {
   private mode: 'text' | 'thinking' = 'text'
+  private closeTag = THINK_CLOSE
   private partial = ''
 
   process(chunk: string, emit: ThinkEmit): void {
@@ -54,9 +69,9 @@ export class ThinkTagParser {
 
     while (input.length > 0) {
       if (this.mode === 'text') {
-        const idx = input.indexOf(THINK_OPEN)
-        if (idx === -1) {
-          const partialAt = findPartialTagSuffix(input, THINK_OPEN)
+        const match = findEarliestTag(input, THINK_OPEN_TAGS)
+        if (!match) {
+          const partialAt = findPartialTagSuffixAny(input, THINK_OPEN_TAGS)
           if (partialAt >= 0) {
             const text = input.slice(0, partialAt)
             if (text) emit.text(text)
@@ -66,16 +81,17 @@ export class ThinkTagParser {
           emit.text(input)
           return
         }
-        const before = input.slice(0, idx)
+        const before = input.slice(0, match.index)
         if (before) emit.text(before)
-        input = input.slice(idx + THINK_OPEN.length)
+        input = input.slice(match.index + match.tag.length)
+        this.closeTag = THINK_CLOSE_BY_OPEN[match.tag] ?? THINK_CLOSE
         this.mode = 'thinking'
         continue
       }
 
-      const idx = input.indexOf(THINK_CLOSE)
+      const idx = input.indexOf(this.closeTag)
       if (idx === -1) {
-        const partialAt = findPartialTagSuffix(input, THINK_CLOSE)
+        const partialAt = findPartialTagSuffix(input, this.closeTag)
         if (partialAt >= 0) {
           const reasoning = input.slice(0, partialAt)
           if (reasoning) emit.reasoning(reasoning)
@@ -87,7 +103,7 @@ export class ThinkTagParser {
       }
       const inside = input.slice(0, idx)
       if (inside) emit.reasoning(inside)
-      input = input.slice(idx + THINK_CLOSE.length)
+      input = input.slice(idx + this.closeTag.length)
       this.mode = 'text'
     }
   }
@@ -100,6 +116,21 @@ export class ThinkTagParser {
   }
 }
 
+function findEarliestTag(
+  input: string,
+  tags: readonly string[],
+): { index: number; tag: string } | null {
+  let best: { index: number; tag: string } | null = null
+  for (const tag of tags) {
+    const index = input.indexOf(tag)
+    if (index === -1) continue
+    if (!best || index < best.index || (index === best.index && tag.length > best.tag.length)) {
+      best = { index, tag }
+    }
+  }
+  return best
+}
+
 function findPartialTagSuffix(input: string, tag: string): number {
   for (let len = Math.min(tag.length - 1, input.length); len > 0; len -= 1) {
     if (tag.startsWith(input.slice(-len))) {
@@ -107,6 +138,15 @@ function findPartialTagSuffix(input: string, tag: string): number {
     }
   }
   return -1
+}
+
+function findPartialTagSuffixAny(input: string, tags: readonly string[]): number {
+  let best = -1
+  for (const tag of tags) {
+    const at = findPartialTagSuffix(input, tag)
+    if (at >= 0 && (best < 0 || at < best)) best = at
+  }
+  return best
 }
 
 function stableJson(value: unknown): string {

@@ -14,6 +14,7 @@ export const PermissionConfig = z.union([
   z
     .object({
       page_read: PermissionRule.optional(),
+      grep_page: PermissionRule.optional(),
       click: PermissionRule.optional(),
       type: PermissionRule.optional(),
       navigate: PermissionRule.optional(),

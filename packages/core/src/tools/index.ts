@@ -51,3 +51,13 @@ export {
   isToolAvailable,
   toAiSdkTools,
 } from './ai-sdk.js'
+export {
+  requireBrowser,
+  resolveTabId,
+  type A11yFilter,
+  type A11yTreeResult,
+  type BrowserBridge,
+  type BrowserToolContext,
+  type ScreenshotResult,
+  type TabInfo,
+} from './browser.js'

@@ -12,17 +12,18 @@ A BYOK browser AI agent extension — act on the web like a user, with any conne
 
 ## Status
 
-**Sprint 4 ready (v0.3.x)** — browser act tools + side panel UX.
+**Sprint 5 in progress** — permissions & safety on top of **v0.3.1** (full Sprint 4).
 
 | Capability | Status |
 |------------|--------|
 | Settings / BYOK keys / model picker | ✅ |
 | Streaming chat + session history + light/dark | ✅ |
-| Tool loop + markdown / reasoning / collapsible tools | ✅ |
-| Read page (a11y) / grep / tabs / navigate / screenshot | ✅ |
 | CDP + click / type / scroll / hover / select | ✅ |
-| Visual indicator / tab groups / clipboard-safe paste | ✅ (this sprint) |
-| Permission ask UI | ⏳ Sprint 5 |
+| Visual indicator / tab groups / clipboard-safe paste | ✅ |
+| Permission ask UI (Once / Always / Reject) | ✅ |
+| Plan / Ask / Auto execution modes | ✅ |
+| Site rules + sensitive path defaults | ✅ |
+| Doom-loop pause + continue/stop | ✅ |
 | OAuth (OpenAI / Claude) | ⏳ Planned |
 
 ## Quick start (from source)
@@ -116,6 +117,6 @@ git push origin v0.2.0
 
 ## Roadmap (next)
 
-1. **Sprint 4** — CDP + click / type / scroll / hover / select  
-2. **Sprint 5** — Permission ask UI + execution modes  
-3. **OAuth** — OpenAI / Claude via `chrome.identity` (DHR-75 / DHR-76)
+1. **Sprint 5** — Permission ask UI + execution modes (in progress)
+2. **OAuth** — ChatGPT / Claude via Settings Connect (DHR-75 / DHR-76)
+3. **Gemini** — Google AI Studio provider UX (DHR-84)

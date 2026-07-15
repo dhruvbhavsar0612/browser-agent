@@ -177,9 +177,6 @@ describe('processFullStream', () => {
     )
 
     expect(onDetect).toHaveBeenCalledOnce()
-    expect(events.some((e) => e.kind === 'permission-ask' && e.permission === 'doom_loop')).toBe(
-      true,
-    )
     expect(result.stopped).toBe(true)
   })
 

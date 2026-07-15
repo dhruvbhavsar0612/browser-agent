@@ -2,12 +2,12 @@ import {
   CredentialVault,
   MissingApiKeyError,
   PermissionEngine,
+  buildRunRuleset,
+  credentialSecretToApiKey,
   filterToolsByPermission,
-  fromConfig,
   getAgent,
   getModel,
   listTools,
-  mergeRules,
   resolveModelRef,
   runAgentLoop,
   toAiSdkTools,
@@ -36,15 +36,6 @@ export type AgentHandlerDeps = {
 
 const activeRuns = new Map<string, AbortController>()
 
-const STUB_AUTO_ALLOW = new Set([
-  'echo',
-  'get_time',
-  'tabs',
-  'tab_focus',
-  'page_read',
-  'grep_page',
-])
-
 export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): void {
   const permission = deps.permission ?? new PermissionEngine()
 
@@ -69,8 +60,15 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         error: 'Missing permission reply id or response',
       })
     }
-    permission.reply({ id: payload.id, response: payload.response })
-    return createResponse(message, 'permission.reply', { ok: true })
+    try {
+      permission.reply({ id: payload.id, response: payload.response })
+      return createResponse(message, 'permission.reply', { ok: true })
+    } catch (err) {
+      return createResponse(message, 'permission.reply', {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   })
 
   bus.onPort('agent.prompt', async (message: Envelope, port) => {
@@ -117,16 +115,19 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       const providerConfig = appConfig.provider[modelRef.providerID]
 
       const model = await getModel(modelRef.providerID, modelRef.modelID, {
-        apiKey: credential?.secret,
+        apiKey: credential
+          ? credentialSecretToApiKey(credential.secret, credential.type)
+          : undefined,
         baseURL: providerConfig?.api,
         headers: providerConfig?.options?.headers,
         name: providerConfig?.name ?? modelRef.providerID,
       })
 
-      const ruleset = mergeRules(
-        fromConfig(appConfig.permission),
-        agentInfo?.permission ?? [],
-      )
+      const ruleset = buildRunRuleset({
+        executionMode: appConfig.executionMode,
+        agentRules: agentInfo?.permission,
+        userPermission: appConfig.permission,
+      })
 
       permission.onAsk((request) => {
         push({
@@ -136,9 +137,6 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
           patterns: request.patterns,
           metadata: request.metadata,
         })
-        if (STUB_AUTO_ALLOW.has(request.permission)) {
-          permission.reply({ id: request.id, response: 'once' })
-        }
       })
 
       const sessionId = payload.sessionId ?? requestId
@@ -191,13 +189,14 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
             : undefined,
         doomLoop: {
           threshold: 3,
-          onDetect: async () => {
+          onDetect: async (info) => {
             try {
               await permission.ask({
                 sessionID: sessionId,
                 ruleset,
                 permission: 'doom_loop',
                 patterns: ['*'],
+                metadata: info,
               })
               return 'continue'
             } catch {

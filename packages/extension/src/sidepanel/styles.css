@@ -86,7 +86,8 @@ body,
   display: grid;
   grid-template-rows: auto 1fr auto;
   height: 100%;
-  min-height: 480px;
+  min-height: 0;
+  max-height: 100%;
 }
 
 /* ── Header ── */
@@ -129,6 +130,43 @@ body,
 
   .agent-picker-label {
     display: none;
+  }
+
+  .header {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .header-start {
+    width: 100%;
+  }
+
+  .header-end {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .theme-toggle-btn {
+    padding: 4px 6px;
+    font-size: 9px;
+  }
+
+  .status {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 320px) {
+  .brand {
+    font-size: 14px;
+  }
+
+  .nav-item {
+    padding: 8px 6px;
+    font-size: 12px;
   }
 }
 
@@ -251,6 +289,14 @@ body,
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.main-fill > .settings {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .panel-placeholder {

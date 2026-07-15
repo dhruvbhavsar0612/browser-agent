@@ -3,6 +3,7 @@ import {
   CredentialVault,
   ModelsDevService,
   createResponse,
+  credentialSecretToApiKey,
   fetchOpenAICompatibleModels,
   generateText,
   getModel,
@@ -49,7 +50,7 @@ async function resolveModelOptions(
   const options = providerCfg?.options as { baseURL?: string } | undefined
 
   return {
-    apiKey: cred?.secret,
+    apiKey: cred ? credentialSecretToApiKey(cred.secret, cred.type) : undefined,
     baseURL: providerCfg?.api ?? options?.baseURL,
     name: providerCfg?.name ?? providerID,
   }
@@ -146,12 +147,15 @@ export function registerSettingsHandlers(bus: MessageBus, deps: SettingsHandlerD
       return createResponse(message, 'vault.list', { entries })
     })
     .on('vault.delete', async (message) => {
-      const payload = (message.payload ?? {}) as { providerId?: string }
+      const payload = (message.payload ?? {}) as {
+        providerId?: string
+        type?: 'api' | 'oauth'
+      }
       const providerId = payload.providerId?.trim()
       if (!providerId) {
         throw new Error('providerId is required')
       }
-      await vault.delete(providerId)
+      await vault.delete(providerId, payload.type)
       const entries = await vault.list()
       return createResponse(message, 'vault.delete', { ok: true, entries })
     })

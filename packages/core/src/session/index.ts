@@ -81,6 +81,10 @@ export interface SessionStore {
   createSession(input: { title?: string; agent: string; model?: string }): Promise<SessionRecord>
   listSessions(): Promise<SessionRecord[]>
   getSession(id: string): Promise<SessionRecord | null>
+  updateSession(
+    id: string,
+    patch: { title?: string; agent?: string; model?: string },
+  ): Promise<SessionRecord | null>
   appendMessage(input: Omit<MessageRecord, 'id' | 'createdAt'> & { id?: string }): Promise<MessageRecord>
   appendPart(input: Omit<PartRecord, 'id' | 'createdAt'> & { id?: string }): Promise<PartRecord>
   listMessages(sessionId: string): Promise<MessageRecord[]>
@@ -117,6 +121,24 @@ export class IndexedDbSessionStore implements SessionStore {
 
   async getSession(id: string): Promise<SessionRecord | null> {
     return (await (await this.db()).get('sessions', id)) ?? null
+  }
+
+  async updateSession(
+    id: string,
+    patch: { title?: string; agent?: string; model?: string },
+  ): Promise<SessionRecord | null> {
+    const db = await this.db()
+    const existing = await db.get('sessions', id)
+    if (!existing) return null
+    const next: SessionRecord = {
+      ...existing,
+      title: patch.title !== undefined ? patch.title.trim() || existing.title : existing.title,
+      agent: patch.agent ?? existing.agent,
+      model: patch.model !== undefined ? patch.model : existing.model,
+      updatedAt: Date.now(),
+    }
+    await db.put('sessions', next)
+    return next
   }
 
   async appendMessage(
@@ -217,6 +239,23 @@ export class MemorySessionStore implements SessionStore {
 
   async getSession(id: string): Promise<SessionRecord | null> {
     return this.sessions.get(id) ?? null
+  }
+
+  async updateSession(
+    id: string,
+    patch: { title?: string; agent?: string; model?: string },
+  ): Promise<SessionRecord | null> {
+    const existing = this.sessions.get(id)
+    if (!existing) return null
+    const next: SessionRecord = {
+      ...existing,
+      title: patch.title !== undefined ? patch.title.trim() || existing.title : existing.title,
+      agent: patch.agent ?? existing.agent,
+      model: patch.model !== undefined ? patch.model : existing.model,
+      updatedAt: Date.now(),
+    }
+    this.sessions.set(id, next)
+    return next
   }
 
   async appendMessage(

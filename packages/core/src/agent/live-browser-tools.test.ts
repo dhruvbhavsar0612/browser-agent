@@ -70,6 +70,12 @@ function createLiveFakeBridge(): BrowserBridge {
       dataBase64: Buffer.from('fake').toString('base64'),
       byteLength: 4,
     }),
+    resolveRef: async () => ({ ok: true, x: 100, y: 200 }),
+    click: async () => ({ x: 100, y: 200 }),
+    type: async () => ({ typed: 'test' }),
+    scroll: async () => ({ direction: 'down' as const }),
+    hover: async () => ({ x: 50, y: 60 }),
+    select: async () => ({ selected: 'opt', refId: 'ref_1' }),
   }
 }
 

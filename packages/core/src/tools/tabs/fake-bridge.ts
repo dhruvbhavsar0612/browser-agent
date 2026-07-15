@@ -1,5 +1,27 @@
 import type { BrowserBridge, BrowserToolContext, TabInfo } from '../browser.js'
 
+export const actBridgeStubs: Pick<
+  BrowserBridge,
+  'resolveRef' | 'click' | 'type' | 'scroll' | 'hover' | 'select'
+> = {
+  resolveRef: async () => ({ ok: false as const, error: 'not implemented' }),
+  click: async () => {
+    throw new Error('not implemented')
+  },
+  type: async () => {
+    throw new Error('not implemented')
+  },
+  scroll: async () => {
+    throw new Error('not implemented')
+  },
+  hover: async () => {
+    throw new Error('not implemented')
+  },
+  select: async () => {
+    throw new Error('not implemented')
+  },
+}
+
 export function createFakeBrowserBridge(overrides: Partial<BrowserBridge> = {}): BrowserBridge {
   const tabs: TabInfo[] = [
     { id: 1, title: 'Tab A', url: 'https://a.example', active: true, windowId: 1 },
@@ -42,6 +64,7 @@ export function createFakeBrowserBridge(overrides: Partial<BrowserBridge> = {}):
     pageScreenshot: async () => {
       throw new Error('not implemented')
     },
+    ...actBridgeStubs,
     ...overrides,
   }
 }

@@ -1,5 +1,10 @@
 import { z } from 'zod'
 import { navigateTool } from './navigate.js'
+import { clickTool } from './act/click.js'
+import { hoverTool } from './act/hover.js'
+import { scrollTool } from './act/scroll.js'
+import { selectTool } from './act/select.js'
+import { typeTool } from './act/type.js'
 import { pageGrepTool } from './page/grep.js'
 import { pageReadTool } from './page/read.js'
 import { pageScreenshotTool } from './page/screenshot.js'
@@ -28,7 +33,7 @@ export interface ToolDefinition {
   description: string
   parameters: z.ZodTypeAny
   permission: string
-  permissionPatterns: (args: unknown) => string[]
+  permissionPatterns: (args: unknown, ctx?: ToolContext) => string[] | Promise<string[]>
   execute: (args: unknown, ctx: ToolContext) => Promise<unknown>
 }
 
@@ -37,7 +42,7 @@ export function defineTool<T extends z.ZodTypeAny>(tool: {
   description: string
   parameters: T
   permission: string
-  permissionPatterns: (args: z.infer<T>) => string[]
+  permissionPatterns: (args: z.infer<T>, ctx?: ToolContext) => string[] | Promise<string[]>
   execute: (args: z.infer<T>, ctx: ToolContext) => Promise<unknown>
 }): ToolDefinition {
   return {
@@ -45,7 +50,7 @@ export function defineTool<T extends z.ZodTypeAny>(tool: {
     description: tool.description,
     parameters: tool.parameters,
     permission: tool.permission,
-    permissionPatterns: (args) => tool.permissionPatterns(args as z.infer<T>),
+    permissionPatterns: (args, ctx) => tool.permissionPatterns(args as z.infer<T>, ctx),
     execute: (args, ctx) => tool.execute(args as z.infer<T>, ctx),
   }
 }
@@ -62,12 +67,22 @@ export function listTools(): ToolDefinition[] {
     pageReadTool,
     pageGrepTool,
     pageScreenshotTool,
+    clickTool,
+    typeTool,
+    scrollTool,
+    hoverTool,
+    selectTool,
   ]
 }
 
 export { echoTool } from './stubs/echo.js'
 export { getTimeTool } from './stubs/get-time.js'
 export { navigateTool } from './navigate.js'
+export { clickTool } from './act/click.js'
+export { typeTool } from './act/type.js'
+export { scrollTool } from './act/scroll.js'
+export { hoverTool } from './act/hover.js'
+export { selectTool } from './act/select.js'
 export { pageGrepTool } from './page/grep.js'
 export { pageReadTool } from './page/read.js'
 export { pageScreenshotTool } from './page/screenshot.js'
@@ -87,6 +102,13 @@ export {
   type A11yTreeResult,
   type BrowserBridge,
   type BrowserToolContext,
+  type ClickOptions,
+  type HoverOptions,
+  type ResolveRefResult,
   type ScreenshotResult,
+  type ScrollOptions,
+  type SelectOptions,
   type TabInfo,
+  type TypeOptions,
 } from './browser.js'
+export { pageUrlPermissionPatterns } from './page-url-pattern.js'

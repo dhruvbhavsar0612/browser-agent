@@ -24,6 +24,11 @@ describe('tools', () => {
       'page_read',
       'page_grep',
       'page_screenshot',
+      'click',
+      'type',
+      'scroll',
+      'hover',
+      'select',
     ])
   })
 
@@ -33,6 +38,17 @@ describe('tools', () => {
     expect(filtered.map((tool) => tool.id)).toEqual(['echo'])
     expect(isToolAvailable(getTimeTool, denyAll)).toBe(false)
     expect(isToolAvailable(echoTool, denyAll)).toBe(true)
+  })
+
+  it('allows act agent tools by default permission rules', () => {
+    const actRules = fromConfig(DEFAULT_CONFIG.agent.act?.permission ?? {})
+    const ids = filterToolsByPermission(listTools(), actRules).map((tool) => tool.id)
+    expect(ids).toContain('click')
+    expect(ids).toContain('type')
+    expect(ids).toContain('scroll')
+    expect(ids).toContain('hover')
+    expect(ids).toContain('select')
+    expect(ids).toContain('navigate')
   })
 
   it('allows browse agent tools by default permission rules', () => {

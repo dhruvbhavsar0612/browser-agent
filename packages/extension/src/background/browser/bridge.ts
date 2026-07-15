@@ -1,6 +1,14 @@
 import type { BrowserBridge } from '@browser-agent/core'
 import { generateA11yTree } from './a11y.js'
 import {
+  actClick,
+  actHover,
+  actResolveRef,
+  actScroll,
+  actSelect,
+  actType,
+} from './act.js'
+import {
   captureTabScreenshot,
   navigateTab,
   toTabInfo,
@@ -46,6 +54,12 @@ export function createBrowserBridge(overrides: ChromeBridgeOverrides = {}): Brow
     waitForLoad: waitForTabLoad,
     pageRead: generateA11yTree,
     pageScreenshot: captureTabScreenshot,
+    resolveRef: actResolveRef,
+    click: actClick,
+    type: actType,
+    scroll: actScroll,
+    hover: actHover,
+    select: actSelect,
     ...overrides,
   }
   return bridge

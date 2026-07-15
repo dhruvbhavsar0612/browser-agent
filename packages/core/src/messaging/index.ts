@@ -16,6 +16,8 @@ export const MessageType = z.enum([
   'session.list',
   'session.get',
   'session.create',
+  'session.update',
+  'session.delete',
   'vault.set',
   'vault.list',
   'vault.delete',
@@ -43,6 +45,7 @@ export type Envelope = z.infer<typeof Envelope>
 
 export const StreamEvent = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('text-delta'), text: z.string() }),
+  z.object({ kind: z.literal('reasoning-delta'), text: z.string() }),
   z.object({
     kind: z.literal('tool-call'),
     toolCallId: z.string(),

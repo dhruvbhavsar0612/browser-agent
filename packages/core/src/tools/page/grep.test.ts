@@ -17,6 +17,12 @@ function fakeBrowser(overrides: Partial<BrowserBridge> = {}): BrowserBridge {
       viewport: FIXTURE_VIEWPORT,
     })),
     pageScreenshot: vi.fn(),
+    resolveRef: vi.fn(async () => ({ ok: false as const, error: 'not implemented' })),
+    click: vi.fn(),
+    type: vi.fn(),
+    scroll: vi.fn(),
+    hover: vi.fn(),
+    select: vi.fn(),
     ...overrides,
   }
 }

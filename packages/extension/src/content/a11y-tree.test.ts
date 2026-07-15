@@ -90,6 +90,36 @@ describe('a11y-tree', () => {
     expect(truncated.truncated).toBe(true)
     expect(truncated.error).toBeUndefined()
   })
+
+  it('resolves ref_id to center coordinates', () => {
+    window.__baGenerateA11yTree('interactive')
+    const ref = window.__baGenerateA11yTree('interactive').pageContent.match(
+      /button "Submit" \[(ref_\d+)\]/,
+    )?.[1]
+    expect(ref).toBeTruthy()
+    const resolved = window.__baResolveRef(ref!)
+    expect(resolved).toEqual({ ok: true, x: 60, y: 16 })
+  })
+
+  it('selects option on select element by label', () => {
+    loadFixture(`
+      <body>
+        <select id="country">
+          <option value="us">United States</option>
+          <option value="ca">Canada</option>
+        </select>
+      </body>
+    `)
+    window.__baGenerateA11yTree('interactive')
+    const ref = window.__baGenerateA11yTree('interactive').pageContent.match(
+      /combobox.*\[(ref_\d+)\]/,
+    )?.[1]
+    expect(ref).toBeTruthy()
+    const result = window.__baSelectRef(ref!, null, 'Canada')
+    expect(result).toEqual({ ok: true, selected: 'Canada' })
+    const select = document.querySelector('#country') as HTMLSelectElement
+    expect(select.value).toBe('ca')
+  })
 })
 
 declare global {
@@ -105,5 +135,13 @@ declare global {
       error?: string
       truncated?: boolean
     }
+    __baResolveRef: (refId: string) =>
+      | { ok: true; x: number; y: number }
+      | { ok: false; error: string }
+    __baSelectRef: (
+      refId: string,
+      value?: string | null,
+      label?: string | null,
+    ) => { ok: true; selected: string } | { ok: false; error: string }
   }
 }

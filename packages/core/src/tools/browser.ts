@@ -28,6 +28,40 @@ export type ScreenshotResult = {
   byteLength: number
 }
 
+export type ResolveRefResult =
+  | { ok: true; x: number; y: number }
+  | { ok: false; error: string }
+
+export type ClickOptions = {
+  refId?: string
+  x?: number
+  y?: number
+  button?: 'left' | 'right'
+  clickCount?: number
+}
+
+export type HoverOptions = {
+  refId?: string
+  x?: number
+  y?: number
+}
+
+export type TypeOptions = {
+  text: string
+  refId?: string
+}
+
+export type ScrollOptions = {
+  direction: 'up' | 'down' | 'top' | 'bottom'
+  amount?: number
+}
+
+export type SelectOptions = {
+  refId: string
+  value?: string
+  label?: string
+}
+
 export type BrowserBridge = {
   tabsList: () => Promise<TabInfo[]>
   tabsFocus: (tabId: number) => Promise<TabInfo>
@@ -46,6 +80,15 @@ export type BrowserBridge = {
     tabId: number,
     opts?: { format?: 'jpeg' | 'png'; quality?: number },
   ) => Promise<ScreenshotResult>
+  resolveRef: (tabId: number, refId: string) => Promise<ResolveRefResult>
+  click: (tabId: number, opts: ClickOptions) => Promise<{ x: number; y: number; refId?: string }>
+  type: (tabId: number, opts: TypeOptions) => Promise<{ typed: string; refId?: string }>
+  scroll: (tabId: number, opts: ScrollOptions) => Promise<{ direction: ScrollOptions['direction'] }>
+  hover: (tabId: number, opts: HoverOptions) => Promise<{ x: number; y: number; refId?: string }>
+  select: (
+    tabId: number,
+    opts: SelectOptions,
+  ) => Promise<{ selected: string; refId: string }>
 }
 
 import type { ToolContext } from './index.js'

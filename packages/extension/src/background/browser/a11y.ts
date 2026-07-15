@@ -88,6 +88,48 @@ export async function generateA11yTree(
   return result
 }
 
+export type ResolveRefResult =
+  | { ok: true; x: number; y: number }
+  | { ok: false; error: string }
+
+export type SelectRefResult =
+  | { ok: true; selected: string }
+  | { ok: false; error: string }
+
+/** Resolve ref_id to viewport center coordinates in the tab's main frame. */
+export async function resolveRef(tabId: number, refId: string): Promise<ResolveRefResult> {
+  await ensureA11yInjected(tabId)
+  return runInPage(
+    tabId,
+    ((id: string) => {
+      if (typeof window.__baResolveRef !== 'function') {
+        return { ok: false as const, error: 'a11y tree script not injected' }
+      }
+      return window.__baResolveRef(id)
+    }) as (...args: never[]) => ResolveRefResult,
+    [refId] as never[],
+  )
+}
+
+/** Set a <select> value by ref_id using value or visible label. */
+export async function selectRef(
+  tabId: number,
+  refId: string,
+  opts: { value?: string; label?: string },
+): Promise<SelectRefResult> {
+  await ensureA11yInjected(tabId)
+  return runInPage(
+    tabId,
+    ((id: string, value: string | null, label: string | null) => {
+      if (typeof window.__baSelectRef !== 'function') {
+        return { ok: false as const, error: 'a11y tree script not injected' }
+      }
+      return window.__baSelectRef(id, value, label)
+    }) as (...args: never[]) => SelectRefResult,
+    [refId, opts.value ?? null, opts.label ?? null] as never[],
+  )
+}
+
 declare global {
   interface Window {
     __baGenerateA11yTree: (
@@ -96,5 +138,11 @@ declare global {
       maxChars?: number | null,
       refId?: string | null,
     ) => A11yTreeResult
+    __baResolveRef: (refId: string) => ResolveRefResult
+    __baSelectRef: (
+      refId: string,
+      value?: string | null,
+      label?: string | null,
+    ) => SelectRefResult
   }
 }

@@ -28,9 +28,10 @@ export function toAiSdkTools(tools: ToolDefinition[], ctx: ToolContext): ToolSet
       description: def.description,
       inputSchema: def.parameters,
       execute: async (args) => {
+        const patterns = await Promise.resolve(def.permissionPatterns(args, ctx))
         await ctx.ask({
           permission: def.permission,
-          patterns: def.permissionPatterns(args),
+          patterns,
           metadata: { tool: def.id, args },
         })
         return def.execute(args, ctx)

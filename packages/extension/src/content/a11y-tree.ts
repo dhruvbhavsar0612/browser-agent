@@ -11,8 +11,22 @@ declare global {
       maxChars?: number | null,
       refId?: string | null,
     ) => A11yTreeResult
+    __baResolveRef: (refId: string) => ResolveRefResult
+    __baSelectRef: (
+      refId: string,
+      value?: string | null,
+      label?: string | null,
+    ) => SelectRefResult
   }
 }
+
+type ResolveRefResult =
+  | { ok: true; x: number; y: number }
+  | { ok: false; error: string }
+
+type SelectRefResult =
+  | { ok: true; selected: string }
+  | { ok: false; error: string }
 
 interface A11yTreeResult {
   pageContent: string
@@ -362,6 +376,59 @@ interface A11yTreeResult {
       const msg = e instanceof Error ? e.message : 'unknown error'
       throw new Error('Failed to build accessibility tree: ' + msg)
     }
+  }
+
+  window.__baResolveRef = function (refId) {
+    const entry = window.__baElementMap[refId]
+    if (!entry) {
+      return { ok: false, error: "ref_id '" + refId + "' does not exist or was garbage collected" }
+    }
+    const node = entry.deref()
+    if (!node) {
+      return { ok: false, error: "ref_id '" + refId + "' has been removed from the DOM" }
+    }
+    const clickable =
+      node.closest(
+        'button,a,[role="button"],[role="link"],input,textarea,select,[contenteditable="true"]',
+      ) || node
+    ;(clickable as HTMLElement).scrollIntoView?.({ block: 'center', inline: 'center' })
+    const r = clickable.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) {
+      return { ok: false, error: "ref_id '" + refId + "' has no visible bounding box" }
+    }
+    return {
+      ok: true,
+      x: Math.round(r.left + r.width / 2),
+      y: Math.round(r.top + r.height / 2),
+    }
+  }
+
+  window.__baSelectRef = function (refId, value, label) {
+    const entry = window.__baElementMap[refId]
+    if (!entry) {
+      return { ok: false, error: "ref_id '" + refId + "' does not exist or was garbage collected" }
+    }
+    const node = entry.deref()
+    if (!(node instanceof HTMLSelectElement)) {
+      return { ok: false, error: "ref_id '" + refId + "' is not a <select> element" }
+    }
+    const options = Array.from(node.options)
+    let matched: HTMLOptionElement | undefined
+    if (value) {
+      matched = options.find((opt) => opt.value === value)
+    }
+    if (!matched && label) {
+      const normalized = label.replace(/\s+/g, ' ').trim()
+      matched = options.find((opt) => (opt.textContent || '').replace(/\s+/g, ' ').trim() === normalized)
+    }
+    if (!matched) {
+      return { ok: false, error: 'No matching <option> for value/label on ' + refId }
+    }
+    node.value = matched.value
+    matched.selected = true
+    node.dispatchEvent(new Event('input', { bubbles: true }))
+    node.dispatchEvent(new Event('change', { bubbles: true }))
+    return { ok: true, selected: (matched.textContent || matched.value).trim() }
   }
 })()
 

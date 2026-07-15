@@ -25,9 +25,13 @@ function collect(
 ) {
   const events: StreamEvent[] = []
   const durable: DurablePart[] = []
+  let segmentSequence = 0
   return processFullStream(fixtureStream(parts), {
     onEvent: (event) => events.push(event),
-    onPart: (part) => durable.push(part),
+    onPart: (part) => {
+      durable.push(part)
+    },
+    createSegmentId: (type) => `${type}-${++segmentSequence}`,
     ...opts,
   }).then((result) => ({ events, durable, result }))
 }
@@ -46,7 +50,7 @@ describe('processFullStream', () => {
       'Hello',
       ' world',
     ])
-    expect(durable).toEqual([{ type: 'text', content: 'Hello world' }])
+    expect(durable).toEqual([{ id: 'text-1', type: 'text', content: 'Hello world' }])
   })
 
   it('maps reasoning deltas as reasoning-delta events and persists reasoning parts', async () => {
@@ -57,8 +61,12 @@ describe('processFullStream', () => {
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
 
-    expect(events).toEqual([{ kind: 'reasoning-delta', text: 'think' }])
-    expect(durable).toEqual([{ type: 'reasoning', content: 'think' }])
+    expect(events).toEqual([
+      { kind: 'segment-start', segmentId: 'reasoning-1', segmentType: 'reasoning' },
+      { kind: 'reasoning-delta', segmentId: 'reasoning-1', text: 'think' },
+      { kind: 'segment-end', segmentId: 'reasoning-1', segmentType: 'reasoning' },
+    ])
+    expect(durable).toEqual([{ id: 'reasoning-1', type: 'reasoning', content: 'think' }])
   })
 
   it('maps tool-call and tool-result events with durable parts', async () => {
@@ -78,31 +86,147 @@ describe('processFullStream', () => {
         output: { echoed: 'hi' },
         dynamic: true,
       },
-      { type: 'finish', finishReason: 'tool-calls', rawFinishReason: 'tool-calls', totalUsage: {} as never },
+      {
+        type: 'finish',
+        finishReason: 'tool-calls',
+        rawFinishReason: 'tool-calls',
+        totalUsage: {} as never,
+      },
     ])
 
     expect(events).toEqual([
       {
         kind: 'tool-call',
+        segmentId: 'tool-1',
         toolCallId: 'c1',
         toolName: 'echo',
         args: { text: 'hi' },
       },
       {
         kind: 'tool-result',
+        segmentId: 'tool-1',
         toolCallId: 'c1',
         result: { echoed: 'hi' },
       },
     ])
     expect(durable).toEqual([
       {
+        id: 'tool-1',
         type: 'tool-call',
         content: { toolCallId: 'c1', toolName: 'echo', args: { text: 'hi' } },
       },
       {
         type: 'tool-result',
-        content: { toolCallId: 'c1', result: { echoed: 'hi' } },
+        content: {
+          toolCallId: 'c1',
+          segmentId: 'tool-1',
+          result: { echoed: 'hi' },
+        },
       },
+    ])
+  })
+
+  it('preserves text → tool → text chronology in events and durable parts', async () => {
+    const { events, durable } = await collect([
+      { type: 'text-delta', id: 't1', text: 'Before' },
+      {
+        type: 'tool-call',
+        toolCallId: 'c1',
+        toolName: 'echo',
+        input: { text: 'hi' },
+        dynamic: true,
+      },
+      {
+        type: 'tool-result',
+        toolCallId: 'c1',
+        toolName: 'echo',
+        input: { text: 'hi' },
+        output: 'ok',
+        dynamic: true,
+      },
+      { type: 'text-delta', id: 't2', text: 'After' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    expect(events.map((event) => event.kind)).toEqual([
+      'segment-start',
+      'text-delta',
+      'segment-end',
+      'tool-call',
+      'tool-result',
+      'segment-start',
+      'text-delta',
+      'segment-end',
+    ])
+    expect(durable.map((part) => part.type)).toEqual(['text', 'tool-call', 'tool-result', 'text'])
+    expect(durable.map((part) => part.content)).toEqual([
+      'Before',
+      { toolCallId: 'c1', toolName: 'echo', args: { text: 'hi' } },
+      { toolCallId: 'c1', segmentId: 'tool-2', result: 'ok' },
+      'After',
+    ])
+  })
+
+  it('emits step boundaries and closes content when start events are omitted', async () => {
+    const startStep = {
+      type: 'start-step' as const,
+      request: {} as never,
+      warnings: [],
+    }
+    const finishStep = {
+      type: 'finish-step' as const,
+      response: {} as never,
+      usage: {} as never,
+      finishReason: 'tool-calls' as const,
+      rawFinishReason: 'tool-calls',
+      providerMetadata: undefined,
+    }
+    const { events, durable } = await collect([
+      startStep,
+      { type: 'text-delta', id: 't1', text: 'step one' },
+      finishStep,
+      startStep,
+      { type: 'reasoning-delta', id: 'r1', text: 'step two' },
+      { ...finishStep, finishReason: 'stop' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    expect(events.map((event) => event.kind)).toEqual([
+      'step-start',
+      'segment-start',
+      'text-delta',
+      'segment-end',
+      'step-end',
+      'step-start',
+      'segment-start',
+      'reasoning-delta',
+      'segment-end',
+      'step-end',
+    ])
+    expect(durable).toEqual([
+      { id: 'text-2', type: 'text', content: 'step one' },
+      { id: 'reasoning-4', type: 'reasoning', content: 'step two' },
+    ])
+  })
+
+  it('uses delta source IDs as boundaries when providers omit start/end events', async () => {
+    const { events, durable } = await collect([
+      { type: 'text-delta', id: 'provider-text-1', text: 'first' },
+      { type: 'text-delta', id: 'provider-text-2', text: 'second' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    expect(events.map((event) => event.kind)).toEqual([
+      'segment-start',
+      'text-delta',
+      'segment-end',
+      'segment-start',
+      'text-delta',
+      'segment-end',
+    ])
+    expect(durable).toEqual([
+      { id: 'text-1', type: 'text', content: 'first' },
+      { id: 'text-2', type: 'text', content: 'second' },
     ])
   })
 
@@ -145,9 +269,7 @@ describe('processFullStream', () => {
     ])
     expect(toolErr.events).toContainEqual({ kind: 'error', message: 'boom' })
 
-    const streamErr = await collect([
-      { type: 'error', error: new Error('stream failed') },
-    ])
+    const streamErr = await collect([{ type: 'error', error: new Error('stream failed') }])
     expect(streamErr.events).toContainEqual({ kind: 'error', message: 'stream failed' })
     expect(streamErr.result.stopped).toBe(true)
   })
@@ -209,10 +331,9 @@ describe('processFullStream', () => {
     const controller = new AbortController()
     controller.abort()
 
-    const { result } = await collect(
-      [{ type: 'text-delta', id: 't1', text: 'nope' }],
-      { abortSignal: controller.signal },
-    )
+    const { result } = await collect([{ type: 'text-delta', id: 't1', text: 'nope' }], {
+      abortSignal: controller.signal,
+    })
 
     expect(result.stopped).toBe(true)
   })
@@ -228,10 +349,21 @@ describe('processFullStream', () => {
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
 
-    expect(events).toEqual([
-      { kind: 'text-delta', text: 'Hello ' },
-      { kind: 'reasoning-delta', text: 'secret plan' },
-      { kind: 'text-delta', text: ' world' },
+    expect(events.filter((event) => event.kind.endsWith('-delta'))).toEqual([
+      { kind: 'text-delta', segmentId: 'text-1', text: 'Hello ' },
+      { kind: 'reasoning-delta', segmentId: 'reasoning-2', text: 'secret plan' },
+      { kind: 'text-delta', segmentId: 'text-3', text: ' world' },
+    ])
+    expect(events.map((event) => event.kind)).toEqual([
+      'segment-start',
+      'text-delta',
+      'segment-end',
+      'segment-start',
+      'reasoning-delta',
+      'segment-end',
+      'segment-start',
+      'text-delta',
+      'segment-end',
     ])
   })
 
@@ -246,10 +378,10 @@ describe('processFullStream', () => {
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
 
-    expect(events).toEqual([
-      { kind: 'text-delta', text: 'Hello ' },
-      { kind: 'reasoning-delta', text: 'secret plan' },
-      { kind: 'text-delta', text: ' world' },
+    expect(events.filter((event) => event.kind.endsWith('-delta'))).toEqual([
+      { kind: 'text-delta', segmentId: 'text-1', text: 'Hello ' },
+      { kind: 'reasoning-delta', segmentId: 'reasoning-2', text: 'secret plan' },
+      { kind: 'text-delta', segmentId: 'text-3', text: ' world' },
     ])
   })
 
@@ -262,10 +394,10 @@ describe('processFullStream', () => {
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
 
-    expect(events).toEqual([
-      { kind: 'text-delta', text: 'A ' },
-      { kind: 'reasoning-delta', text: 'inner' },
-      { kind: 'text-delta', text: ' B' },
+    expect(events.filter((event) => event.kind.endsWith('-delta'))).toEqual([
+      { kind: 'text-delta', segmentId: 'text-1', text: 'A ' },
+      { kind: 'reasoning-delta', segmentId: 'reasoning-2', text: 'inner' },
+      { kind: 'text-delta', segmentId: 'text-3', text: ' B' },
     ])
   })
 
@@ -278,7 +410,11 @@ describe('processFullStream', () => {
 
     const textEvents = events.filter((e) => e.kind === 'text-delta')
     expect(textEvents).toHaveLength(0)
-    expect(events).toContainEqual({ kind: 'reasoning-delta', text: 'only think' })
+    expect(events).toContainEqual({
+      kind: 'reasoning-delta',
+      segmentId: 'reasoning-1',
+      text: 'only think',
+    })
   })
 })
 

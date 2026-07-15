@@ -46,19 +46,74 @@ export const Envelope = z.object({
 })
 export type Envelope = z.infer<typeof Envelope>
 
+export type AssistantTextSegment = {
+  id: string
+  type: 'text'
+  content: string
+  status: 'streaming' | 'complete'
+}
+
+export type AssistantReasoningSegment = {
+  id: string
+  type: 'reasoning'
+  content: string
+  status: 'streaming' | 'complete'
+}
+
+export type AssistantToolSegment = {
+  id: string
+  type: 'tool'
+  toolCallId: string
+  toolName: string
+  args?: unknown
+  result?: unknown
+  status: 'pending' | 'done' | 'error'
+}
+
+/** Ordered display unit shared by live streams and transcript reconstruction. */
+export type AssistantMessageSegment =
+  AssistantTextSegment | AssistantReasoningSegment | AssistantToolSegment
+
 export const StreamEvent = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('text-delta'), text: z.string() }),
-  z.object({ kind: z.literal('reasoning-delta'), text: z.string() }),
+  z.object({
+    kind: z.literal('segment-start'),
+    segmentId: z.string().min(1),
+    segmentType: z.enum(['text', 'reasoning']),
+  }),
+  z.object({
+    kind: z.literal('segment-end'),
+    segmentId: z.string().min(1),
+    segmentType: z.enum(['text', 'reasoning']),
+  }),
+  z.object({
+    kind: z.literal('step-start'),
+    stepId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('step-end'),
+    stepId: z.string().min(1),
+    finishReason: z.string().optional(),
+  }),
+  // segmentId remains optional so in-flight events from an older background
+  // worker can still be consumed after an extension update.
+  z.object({ kind: z.literal('text-delta'), text: z.string(), segmentId: z.string().optional() }),
+  z.object({
+    kind: z.literal('reasoning-delta'),
+    text: z.string(),
+    segmentId: z.string().optional(),
+  }),
   z.object({
     kind: z.literal('tool-call'),
     toolCallId: z.string(),
     toolName: z.string(),
     args: z.unknown(),
+    segmentId: z.string().optional(),
   }),
   z.object({
     kind: z.literal('tool-result'),
     toolCallId: z.string(),
     result: z.unknown(),
+    segmentId: z.string().optional(),
   }),
   z.object({
     kind: z.literal('permission-ask'),
@@ -82,7 +137,11 @@ export function createRequest(type: MessageType, payload?: unknown): Envelope {
 }
 
 /** Response that reuses the request's correlation id. */
-export function createResponse(request: Pick<Envelope, 'id'>, type: MessageType, payload?: unknown): Envelope {
+export function createResponse(
+  request: Pick<Envelope, 'id'>,
+  type: MessageType,
+  payload?: unknown,
+): Envelope {
   return createEnvelope(type, payload, request.id)
 }
 

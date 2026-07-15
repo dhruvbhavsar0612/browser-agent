@@ -36,4 +36,26 @@ describe('MemorySessionStore', () => {
     expect(updated?.title).toBe('Renamed chat')
     expect((await store.getSession(session.id))?.title).toBe('Renamed chat')
   })
+
+  it('uses explicit part order without requiring a database migration', async () => {
+    const store = new MemorySessionStore()
+    const session = await store.createSession({ agent: 'browse' })
+    const message = await store.appendMessage({ sessionId: session.id, role: 'assistant' })
+    await store.appendPart({
+      id: 'second',
+      messageId: message.id,
+      type: 'text',
+      content: 'second',
+      order: 1,
+    })
+    await store.appendPart({
+      id: 'first',
+      messageId: message.id,
+      type: 'text',
+      content: 'first',
+      order: 0,
+    })
+
+    expect((await store.listParts(message.id)).map((part) => part.id)).toEqual(['first', 'second'])
+  })
 })

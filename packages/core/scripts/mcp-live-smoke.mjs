@@ -65,13 +65,14 @@ try {
   )
 
   const requestedName = process.env.MCP_TEST_TOOL
+  const allowOpenWorld = process.env.MCP_TEST_ALLOW_OPEN_WORLD === '1'
   const selected = requestedName
     ? listed.tools.find((item) => item.name === requestedName)
     : listed.tools.find(
         (item) =>
           item.annotations?.readOnlyHint === true &&
           item.annotations?.destructiveHint !== true &&
-          item.annotations?.openWorldHint !== true,
+          (allowOpenWorld || item.annotations?.openWorldHint !== true),
       )
   if (!selected) {
     throw new Error(
@@ -83,10 +84,10 @@ try {
   if (
     selected.annotations?.readOnlyHint !== true ||
     selected.annotations?.destructiveHint === true ||
-    selected.annotations?.openWorldHint === true
+    (!allowOpenWorld && selected.annotations?.openWorldHint === true)
   ) {
     throw new Error(
-      `Refusing to call "${selected.name}" because it is not explicitly safe read-only`,
+      `Refusing to call "${selected.name}" because it is not explicitly safe read-only. Set MCP_TEST_ALLOW_OPEN_WORLD=1 only after reviewing an open-world read-only tool.`,
     )
   }
 

@@ -44,4 +44,5 @@ pnpm smoke:mcp
 ```
 
 Review server annotations before selecting `MCP_TEST_TOOL`. The script refuses tools that are not
-explicitly safe read-only.
+explicitly safe read-only. A reviewed tool that is read-only and non-destructive but marked
+`openWorldHint` can be called only with the explicit `MCP_TEST_ALLOW_OPEN_WORLD=1` opt-in.

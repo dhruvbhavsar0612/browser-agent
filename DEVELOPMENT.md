@@ -37,6 +37,14 @@ pnpm pack:extension
 
 Unzip and load the folder unpacked, same as installing from a Release.
 
+### Try browser read tools
+
+1. Build and load the extension
+2. Open `https://example.com` (or any site)
+3. Side panel → agent **browse**
+4. Ask *“What’s on this page?”* or *“List my tabs”*
+5. Chat should show `page_read` / `tabs_list` tool calls and a grounded answer
+
 ## CI / Release
 
 - **CI** (`.github/workflows/ci.yml`) runs on every PR and push to `main`: typecheck, test, build, upload zip artifact.

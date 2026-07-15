@@ -12,7 +12,18 @@ A BYOK browser AI agent extension — act on the web like a user, with any conne
 
 ## Status
 
-**Sprint 1 demo ready** — Settings (BYOK) + streaming chat. Browser tools land in later sprints.
+**Sprint 3 ready (v0.2.x)** — BYOK chat, agent loop, and **browser read tools**.
+
+| Capability | Status |
+|------------|--------|
+| Settings / BYOK keys / model picker | ✅ |
+| Streaming chat + agent picker (`browse` / `act`) | ✅ |
+| Tool loop (`echo`, `get_time`, browser tools) | ✅ |
+| Read page (a11y tree) / grep / list tabs | ✅ |
+| Navigate + screenshot | ✅ |
+| Click / type (Act) | ⏳ Sprint 4 |
+| Permission ask UI | ⏳ Sprint 5 |
+| OAuth (OpenAI / Claude) | ⏳ Planned |
 
 ## Quick start (from source)
 
@@ -32,6 +43,35 @@ pnpm pack:extension
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 
+### Try the read agent
+
+1. Open any page (e.g. `https://example.com`)
+2. Side panel → agent **browse** → ask: *“What’s on this page?”* or *“List my tabs”*
+3. You should see tools like `page_read`, `tabs_list`, `page_grep` run in the chat
+
+OpenAI-compatible endpoints (e.g. OpenCode Zen) work: set **Base URL** + key in Settings; models load from `{baseURL}/models`.
+
+## What’s in the box
+
+### Providers
+- Anthropic, OpenAI, Google, OpenRouter, OpenAI-compatible
+- Encrypted local vault for API keys
+- [models.dev](https://models.dev) catalog + remote `/models` for compatible endpoints
+
+### Agent runtime
+- Multi-step drain loop (`streamText` + tools + step limit)
+- Agents: **browse** (read-only), **act** (ask-gated actions)
+- Stream events: text, tool-call, tool-result
+
+### Browser read tools (Sprint 3)
+| Tool | Purpose |
+|------|---------|
+| `tabs_list` / `tabs_focus` / `tabs_open` / `tabs_close` | Tab management |
+| `page_read` | Accessibility tree with `ref_N` ids |
+| `page_grep` | Search page text / labels |
+| `navigate` | Go to URL (allowed on **act**; denied on **browse**) |
+| `page_screenshot` | Viewport capture (`captureVisibleTab`) |
+
 ## CI & releases
 
 | Workflow | Trigger | What it does |
@@ -39,21 +79,17 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 | **CI** | PR + push to `main` | `typecheck` → `test` → `build` → upload extension zip artifact |
 | **Release** | Push tag `v*` (or manual dispatch) | Same checks → attach zip to a GitHub Release with install notes |
 
-Ship a downloadable build:
-
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
-
-That creates a Release whose assets include `browser-agent-extension-0.1.0.zip`.
 
 ## Concept
 
-- **BYOK** — Bring your own API keys; support 75+ providers via Vercel AI SDK + [models.dev](https://models.dev)
-- **Browser-native tools** — Read tabs, navigate, click, type, screenshot via CDP + accessibility tree
-- **Coding-agent rules** — Permission system (`allow` / `ask` / `deny`), agent modes, session persistence
-- **Open-source patterns** — Architecture modeled on [OpenCode](https://github.com/sst/opencode); browser tools inspired by [Hermes in Chrome](https://github.com/huaqing0/Hermes--in--chrome)
+- **BYOK** — Bring your own API keys; providers via Vercel AI SDK + [models.dev](https://models.dev)
+- **Browser-native tools** — Tabs, a11y page read, navigate, screenshot (click/type next)
+- **Coding-agent rules** — Permission system (`allow` / `ask` / `deny`), agent modes, session store
+- **Open-source patterns** — [OpenCode](https://github.com/sst/opencode)-style loop; browser tools inspired by [Hermes in Chrome](https://github.com/huaqing0/Hermes--in--chrome)
 
 ## Docs
 
@@ -75,11 +111,11 @@ That creates a Release whose assets include `browser-agent-extension-0.1.0.zip`.
 
 | Package | Role |
 |---------|------|
-| `@browser-agent/core` | Config, permission, messaging, provider, agent, session |
-| `@browser-agent/extension` | MV3 Chrome extension (side panel + service worker) |
+| `@browser-agent/core` | Config, vault, providers, agent loop, tools, permissions, session |
+| `@browser-agent/extension` | MV3 extension (side panel, service worker, a11y content script) |
 
-## Reference repos (cloned locally for study)
+## Roadmap (next)
 
-- `opencode-ref/` — [sst/opencode](https://github.com/sst/opencode) provider + agent architecture
-- `hermes-ref/` — [huaqing0/Hermes--in--chrome](https://github.com/huaqing0/Hermes--in--chrome) browser automation tools
-- `hermes-ext-ref/` — [abundantbeing/hermes-browser-extension](https://github.com/abundantbeing/hermes-browser-extension) side panel UX
+1. **Sprint 4** — CDP + click / type / scroll / hover / select  
+2. **Sprint 5** — Permission ask UI + execution modes  
+3. **OAuth** — OpenAI / Claude via `chrome.identity` (DHR-75 / DHR-76)

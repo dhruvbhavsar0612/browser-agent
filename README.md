@@ -12,16 +12,16 @@ A BYOK browser AI agent extension — act on the web like a user, with any conne
 
 ## Status
 
-**Sprint 3 ready (v0.2.x)** — BYOK chat, agent loop, and **browser read tools**.
+**Sprint 4 ready (v0.3.x)** — browser act tools + side panel UX.
 
 | Capability | Status |
 |------------|--------|
 | Settings / BYOK keys / model picker | ✅ |
-| Streaming chat + agent picker (`browse` / `act`) | ✅ |
-| Tool loop (`echo`, `get_time`, browser tools) | ✅ |
-| Read page (a11y tree) / grep / list tabs | ✅ |
-| Navigate + screenshot | ✅ |
-| Click / type (Act) | ⏳ Sprint 4 |
+| Streaming chat + session history + light/dark | ✅ |
+| Tool loop + markdown / reasoning / collapsible tools | ✅ |
+| Read page (a11y) / grep / tabs / navigate / screenshot | ✅ |
+| CDP + click / type / scroll / hover / select | ✅ |
+| Visual indicator / tab groups / clipboard-safe paste | ✅ (this sprint) |
 | Permission ask UI | ⏳ Sprint 5 |
 | OAuth (OpenAI / Claude) | ⏳ Planned |
 

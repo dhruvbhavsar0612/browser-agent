@@ -66,8 +66,34 @@ describe('act tools', () => {
     const ctx = toolCtx(browser, { tabId: 5 })
 
     const result = await typeTool.execute({ text: 'hello', refId: 'ref_2' }, ctx)
-    expect(browser.type).toHaveBeenCalledWith(5, { text: 'hello', refId: 'ref_2' })
+    expect(browser.type).toHaveBeenCalledWith(5, {
+      text: 'hello',
+      refId: 'ref_2',
+      paste: undefined,
+    })
     expect(result).toEqual({ typed: 'hello', refId: 'ref_2' })
+  })
+
+  it('type forwards paste=true for rich-text path', async () => {
+    const browser = actBridge({
+      type: vi.fn(async () => ({
+        typed: 'rich',
+        strategy: 'clipboard_paste' as const,
+        clipboard_restore_mode: 'text' as const,
+      })),
+    })
+    const ctx = toolCtx(browser, { tabId: 5 })
+    const result = await typeTool.execute({ text: 'rich', paste: true }, ctx)
+    expect(browser.type).toHaveBeenCalledWith(5, {
+      text: 'rich',
+      refId: undefined,
+      paste: true,
+    })
+    expect(result).toMatchObject({
+      typed: 'rich',
+      strategy: 'clipboard_paste',
+      clipboard_restore_mode: 'text',
+    })
   })
 
   it('scroll delegates direction to bridge', async () => {

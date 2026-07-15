@@ -16,7 +16,10 @@ export const tabsOpenTool = defineTool({
   permissionPatterns: (args) => [args.url],
   execute: async (args, ctx) => {
     const browser = requireBrowser(ctx)
-    const tab = await browser.tabsOpen(args.url, { background: args.background })
+    const tab = await browser.tabsOpen(args.url, {
+      background: args.background,
+      sessionId: ctx.sessionId,
+    })
     return { tab }
   },
 })

@@ -5,9 +5,12 @@ import type {
   ScrollOptions,
   SelectOptions,
   TypeOptions,
+  TypeResult,
 } from '@browser-agent/core'
+import { withTemporaryClipboard } from './clipboard.js'
 import { resolveRef, selectRef } from './a11y.js'
 import * as cdp from './debugger.js'
+import { assertTypeAllowed, setRichTextDirty } from './rich-text-lock.js'
 
 type PointInput = { refId?: string; x?: number; y?: number }
 
@@ -46,17 +49,71 @@ export async function actHover(
   return point
 }
 
-export async function actType(
-  tabId: number,
-  opts: TypeOptions,
-): Promise<{ typed: string; refId?: string }> {
+export async function actType(tabId: number, opts: TypeOptions): Promise<TypeResult> {
+  await assertTypeAllowed(tabId)
+
   if (opts.refId?.trim()) {
     const point = await resolvePoint(tabId, { refId: opts.refId }, 'type')
     await cdp.mouseClick(tabId, point.x, point.y)
     await new Promise((resolve) => setTimeout(resolve, 80))
   }
-  await cdp.insertText(tabId, opts.text)
-  return { typed: opts.text, refId: opts.refId?.trim() }
+
+  if (!opts.paste) {
+    await cdp.insertText(tabId, opts.text)
+    return {
+      typed: opts.text,
+      refId: opts.refId?.trim(),
+      strategy: 'insert_text',
+      clipboard_restore_mode: 'skipped',
+    }
+  }
+
+  let tabUrl: string | undefined
+  try {
+    tabUrl = (await chrome.tabs.get(tabId)).url
+  } catch {
+    tabUrl = undefined
+  }
+
+  try {
+    const { clipboardRestore } = await withTemporaryClipboard(opts.text, async () => {
+      await cdp.paste(tabId)
+    })
+
+    if (clipboardRestore.mode === 'failed') {
+      setRichTextDirty(
+        tabId,
+        clipboardRestore.error ?? 'clipboard restore failed after paste',
+        tabUrl,
+      )
+    }
+
+    return {
+      typed: opts.text,
+      refId: opts.refId?.trim(),
+      strategy: 'clipboard_paste',
+      clipboard_restore_mode: clipboardRestore.mode,
+      clipboard_restore_error: clipboardRestore.error,
+    }
+  } catch (err) {
+    const restore = (err as Error & { clipboardRestore?: { mode: string; error?: string } })
+      .clipboardRestore
+    setRichTextDirty(
+      tabId,
+      err instanceof Error ? err.message : String(err),
+      tabUrl,
+    )
+    if (restore) {
+      throw Object.assign(
+        new Error(err instanceof Error ? err.message : String(err)),
+        {
+          clipboard_restore_mode: restore.mode,
+          clipboard_restore_error: restore.error,
+        },
+      )
+    }
+    throw err
+  }
 }
 
 export async function actScroll(

@@ -124,6 +124,27 @@ export async function insertText(tabId: number, text: string): Promise<void> {
   await sendCommand(tabId, 'Input.insertText', { text })
 }
 
+/** Chromium editor Paste command (real paste path for contenteditable / ProseMirror). */
+export async function paste(tabId: number): Promise<void> {
+  await sendCommand(tabId, 'Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'v',
+    code: 'KeyV',
+    windowsVirtualKeyCode: 86,
+    nativeVirtualKeyCode: 86,
+    modifiers: 4,
+    commands: ['Paste'],
+  })
+  await sendCommand(tabId, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'v',
+    code: 'KeyV',
+    windowsVirtualKeyCode: 86,
+    nativeVirtualKeyCode: 86,
+    modifiers: 4,
+  })
+}
+
 export async function pressKey(
   tabId: number,
   key: string,

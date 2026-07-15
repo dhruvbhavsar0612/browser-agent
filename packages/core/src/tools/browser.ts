@@ -49,6 +49,16 @@ export type HoverOptions = {
 export type TypeOptions = {
   text: string
   refId?: string
+  /** Use clipboard paste path for rich-text editors (ProseMirror, etc.). */
+  paste?: boolean
+}
+
+export type TypeResult = {
+  typed: string
+  refId?: string
+  strategy?: 'insert_text' | 'clipboard_paste'
+  clipboard_restore_mode?: 'full' | 'text' | 'failed' | 'skipped'
+  clipboard_restore_error?: string
 }
 
 export type ScrollOptions = {
@@ -65,7 +75,10 @@ export type SelectOptions = {
 export type BrowserBridge = {
   tabsList: () => Promise<TabInfo[]>
   tabsFocus: (tabId: number) => Promise<TabInfo>
-  tabsOpen: (url: string, opts?: { background?: boolean }) => Promise<TabInfo>
+  tabsOpen: (
+    url: string,
+    opts?: { background?: boolean; sessionId?: string; groupTitle?: string },
+  ) => Promise<TabInfo>
   tabsClose: (tabId: number) => Promise<{ closed: boolean }>
   tabsGet: (tabId: number) => Promise<TabInfo | null>
   navigate: (tabId: number, url: string) => Promise<TabInfo>
@@ -82,7 +95,7 @@ export type BrowserBridge = {
   ) => Promise<ScreenshotResult>
   resolveRef: (tabId: number, refId: string) => Promise<ResolveRefResult>
   click: (tabId: number, opts: ClickOptions) => Promise<{ x: number; y: number; refId?: string }>
-  type: (tabId: number, opts: TypeOptions) => Promise<{ typed: string; refId?: string }>
+  type: (tabId: number, opts: TypeOptions) => Promise<TypeResult>
   scroll: (tabId: number, opts: ScrollOptions) => Promise<{ direction: ScrollOptions['direction'] }>
   hover: (tabId: number, opts: HoverOptions) => Promise<{ x: number; y: number; refId?: string }>
   select: (

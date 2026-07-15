@@ -10,6 +10,7 @@ import {
   type VaultListEntry,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
+import { RemoteMcpSettings } from './RemoteMcpSettings.js'
 import './Settings.css'
 
 const KEY_PROVIDERS = [
@@ -1229,6 +1230,8 @@ export function SettingsView() {
           </div>
         ) : null}
       </section>
+
+      <RemoteMcpSettings />
 
       <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
     </div>

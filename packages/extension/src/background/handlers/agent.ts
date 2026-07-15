@@ -33,7 +33,14 @@ export type AgentHandlerDeps = {
 
 const activeRuns = new Map<string, AbortController>()
 
-const STUB_AUTO_ALLOW = new Set(['echo', 'get_time', 'tabs', 'tab_focus'])
+const STUB_AUTO_ALLOW = new Set([
+  'echo',
+  'get_time',
+  'tabs',
+  'tab_focus',
+  'page_read',
+  'grep_page',
+])
 
 export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): void {
   const permission = deps.permission ?? new PermissionEngine()

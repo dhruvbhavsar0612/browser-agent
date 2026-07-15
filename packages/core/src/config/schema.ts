@@ -3,10 +3,7 @@ import { z } from 'zod'
 export const PermissionAction = z.enum(['allow', 'ask', 'deny'])
 export type PermissionAction = z.infer<typeof PermissionAction>
 
-export const PermissionRule = z.union([
-  PermissionAction,
-  z.record(z.string(), PermissionAction),
-])
+export const PermissionRule = z.union([PermissionAction, z.record(z.string(), PermissionAction)])
 export type PermissionRule = z.infer<typeof PermissionRule>
 
 export const PermissionConfig = z.union([
@@ -83,6 +80,15 @@ export const McpServerConfig = z.object({
 })
 export type McpServerConfig = z.infer<typeof McpServerConfig>
 
+export const CompactionConfig = z.object({
+  fallbackContextTokens: z.number().int().min(8_192).default(32_768),
+  threshold: z.number().min(0.7).max(0.75).default(0.72),
+  reserveTokens: z.number().int().min(1_024).default(4_096),
+  recentTurns: z.number().int().min(1).default(6),
+  maxToolResultChars: z.number().int().min(1_000).default(12_000),
+})
+export type CompactionConfig = z.infer<typeof CompactionConfig>
+
 export const AppConfig = z.object({
   model: z.string().optional(),
   small_model: z.string().optional(),
@@ -90,6 +96,13 @@ export const AppConfig = z.object({
   agent: z.record(z.string(), AgentConfig).default({}),
   permission: PermissionConfig.default({ '*': 'ask' }),
   mcp: z.record(z.string(), McpServerConfig).default({}),
+  compaction: CompactionConfig.default({
+    fallbackContextTokens: 32_768,
+    threshold: 0.72,
+    reserveTokens: 4_096,
+    recentTurns: 6,
+    maxToolResultChars: 12_000,
+  }),
   executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
 })
 export type AppConfig = z.infer<typeof AppConfig>
@@ -199,7 +212,8 @@ Restrictions:
       description: 'Compress conversation context',
       mode: 'subagent',
       hidden: true,
-      prompt: 'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
+      prompt:
+        'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
       steps: 5,
       permission: { '*': 'deny' },
     },
@@ -207,13 +221,21 @@ Restrictions:
       description: 'Generate a short chat title',
       mode: 'subagent',
       hidden: true,
-      prompt: 'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
+      prompt:
+        'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
       steps: 3,
       permission: { '*': 'deny' },
     },
   },
   permission: { '*': 'ask' },
   mcp: {},
+  compaction: {
+    fallbackContextTokens: 32_768,
+    threshold: 0.72,
+    reserveTokens: 4_096,
+    recentTurns: 6,
+    maxToolResultChars: 12_000,
+  },
   executionMode: 'approval',
 }
 
@@ -228,6 +250,7 @@ export function mergeConfig(base: AppConfig, override: Partial<AppConfig>): AppC
     provider: { ...base.provider, ...override.provider },
     agent: { ...base.agent, ...override.agent },
     mcp: { ...base.mcp, ...override.mcp },
+    compaction: { ...base.compaction, ...override.compaction },
     permission: override.permission ?? base.permission,
   })
 }

@@ -42,11 +42,13 @@ export type ProcessFullStreamOptions = {
   truncateToolResult?: (result: unknown) => unknown
   doomLoop?: DoomLoopOptions
   abortSignal?: AbortSignal
+  emitErrors?: boolean
 }
 
 export type ProcessFullStreamResult = {
   finishReason?: string
   stopped: boolean
+  error?: unknown
 }
 
 type ThinkEmit = {
@@ -201,6 +203,7 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
 
   let finishReason: string | undefined
   let stopped = false
+  let streamError: unknown
   let textBuffer = ''
   let reasoningBuffer = ''
   const thinkParser = new ThinkTagParser()
@@ -357,6 +360,16 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
               : typeof part.error === 'string'
                 ? part.error
                 : 'Tool execution failed'
+          const result = { error: message }
+          options.onEvent({
+            kind: 'tool-result',
+            toolCallId: part.toolCallId,
+            result,
+          })
+          options.onPart?.({
+            type: 'tool-result',
+            content: { toolCallId: part.toolCallId, result },
+          })
           options.onEvent({ kind: 'error', message })
           break
         }
@@ -376,7 +389,8 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
               : typeof part.error === 'string'
                 ? part.error
                 : String(part.error)
-          options.onEvent({ kind: 'error', message })
+          streamError = part.error
+          if (options.emitErrors !== false) options.onEvent({ kind: 'error', message })
           stopped = true
           break
         }
@@ -397,5 +411,5 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
     flushReasoning()
   }
 
-  return { finishReason, stopped }
+  return { finishReason, stopped, error: streamError }
 }

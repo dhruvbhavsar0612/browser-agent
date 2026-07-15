@@ -67,6 +67,12 @@ export const StreamEvent = z.discriminatedUnion('kind', [
     patterns: z.array(z.string()),
     metadata: z.unknown().optional(),
   }),
+  z.object({
+    kind: z.literal('compaction'),
+    status: z.enum(['started', 'completed', 'failed', 'retrying']),
+    message: z.string(),
+    epoch: z.number().int().positive().optional(),
+  }),
   z.object({ kind: z.literal('error'), message: z.string() }),
   z.object({ kind: z.literal('done') }),
 ])
@@ -82,7 +88,11 @@ export function createRequest(type: MessageType, payload?: unknown): Envelope {
 }
 
 /** Response that reuses the request's correlation id. */
-export function createResponse(request: Pick<Envelope, 'id'>, type: MessageType, payload?: unknown): Envelope {
+export function createResponse(
+  request: Pick<Envelope, 'id'>,
+  type: MessageType,
+  payload?: unknown,
+): Envelope {
   return createEnvelope(type, payload, request.id)
 }
 

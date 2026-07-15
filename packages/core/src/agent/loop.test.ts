@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TextStreamPart, ToolSet } from 'ai'
 import { MemorySessionStore } from '../session/index.js'
 import type { StreamEvent } from '../messaging/index.js'
@@ -26,6 +26,10 @@ function mockFullStream(parts: TextStreamPart<ToolSet>[]) {
 }
 
 describe('runAgentLoop', () => {
+  beforeEach(() => {
+    streamTextMock.mockReset()
+  })
+
   it('pipes fullStream through the processor and emits done', async () => {
     mockFullStream([
       { type: 'text-delta', id: 't1', text: 'Hi' },
@@ -90,5 +94,84 @@ describe('runAgentLoop', () => {
     })
 
     expect(events.some((event) => event.kind === 'done')).toBe(false)
+  })
+
+  it('compacts and retries once on a context overflow before visible output', async () => {
+    streamTextMock
+      .mockReturnValueOnce({
+        fullStream: (async function* () {
+          yield {
+            type: 'error',
+            error: new Error('maximum context length exceeded'),
+          } as TextStreamPart<ToolSet>
+        })(),
+      })
+      .mockReturnValueOnce({
+        fullStream: (async function* () {
+          yield { type: 'text-delta', id: 't2', text: 'Recovered' } as TextStreamPart<ToolSet>
+          yield { type: 'text-end', id: 't2' } as TextStreamPart<ToolSet>
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            rawFinishReason: 'stop',
+            totalUsage: {},
+          } as TextStreamPart<ToolSet>
+        })(),
+      })
+    const store = new MemorySessionStore()
+    const session = await store.createSession({ agent: 'browse' })
+    const events: StreamEvent[] = []
+    const onContextOverflow = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, content: 'compacted question' }],
+      system: 'agent prompt with compacted summary',
+    }))
+
+    await runAgentLoop({
+      model: {} as never,
+      messages: [{ role: 'user', content: 'large question' }],
+      onEvent: (event) => events.push(event),
+      onContextOverflow,
+      session: { store, sessionId: session.id },
+    })
+
+    expect(onContextOverflow).toHaveBeenCalledOnce()
+    expect(streamTextMock).toHaveBeenCalledTimes(2)
+    expect(streamTextMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      messages: [{ role: 'user', content: 'compacted question' }],
+      system: 'agent prompt with compacted summary',
+    })
+    expect(events).toEqual([{ kind: 'text-delta', text: 'Recovered' }, { kind: 'done' }])
+    const transcript = await store.getTranscript(session.id)
+    expect(transcript).toHaveLength(2)
+    expect(transcript[0]?.parts[0]?.content).toBe('large question')
+    expect(transcript[1]?.parts[0]?.content).toBe('Recovered')
+  })
+
+  it('does not retry an overflow after visible output', async () => {
+    mockFullStream([
+      { type: 'text-delta', id: 't1', text: 'Partial' },
+      {
+        type: 'error',
+        error: new Error('context length exceeded'),
+      } as TextStreamPart<ToolSet>,
+    ])
+    const events: StreamEvent[] = []
+    const onContextOverflow = vi.fn(async () => ({
+      messages: [{ role: 'user' as const, content: 'compacted' }],
+    }))
+
+    await runAgentLoop({
+      model: {} as never,
+      messages: [{ role: 'user', content: 'large question' }],
+      onEvent: (event) => events.push(event),
+      onContextOverflow,
+    })
+
+    expect(onContextOverflow).not.toHaveBeenCalled()
+    expect(streamTextMock).toHaveBeenCalledOnce()
+    expect(events).toEqual([
+      { kind: 'text-delta', text: 'Partial' },
+      { kind: 'error', message: 'context length exceeded' },
+    ])
   })
 })

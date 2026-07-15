@@ -5,6 +5,8 @@ import {
   createResponse,
   IndexedDbSessionStore,
   ModelsDevService,
+  McpMarketplaceService,
+  RemoteMcpRegistry,
   isModelEnabled,
   parseModelRef,
   type Envelope,
@@ -12,18 +14,27 @@ import {
 import { createMessageBus, runDemoStream } from './bus.js'
 import { registerAgentHandlers } from './handlers/agent.js'
 import { registerOAuthHandlers } from './handlers/oauth.js'
+import { registerMcpHandlers } from './handlers/mcp.js'
 import { registerSettingsHandlers } from './handlers/settings.js'
 
 const storage = createChromeStorage()
 const config = new ConfigService(storage)
 const models = new ModelsDevService(storage)
 const vault = new CredentialVault(storage)
+const mcp = new RemoteMcpRegistry(config, vault, storage, {
+  oauthRedirectUrl: () => chrome.identity.getRedirectURL('mcp'),
+})
+const mcpMarketplace = new McpMarketplaceService()
 const sessions = new IndexedDbSessionStore()
 const bus = createMessageBus()
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
   void config.get()
+})
+
+chrome.runtime.onSuspend.addListener(() => {
+  void mcp.closeAll()
 })
 
 chrome.commands.onCommand.addListener((command) => {
@@ -89,7 +100,8 @@ bus
   })
 
 registerSettingsHandlers(bus, { vault, models, config })
-registerAgentHandlers(bus, { config, vault, sessions, models })
+registerMcpHandlers(bus, { config, vault, registry: mcp, marketplace: mcpMarketplace })
+registerAgentHandlers(bus, { config, vault, sessions, models, mcp })
 registerOAuthHandlers(bus, { vault })
 
 bus.listen()

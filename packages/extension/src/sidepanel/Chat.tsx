@@ -9,37 +9,21 @@ import {
   type StreamEvent,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
+import { MarkdownContent } from './markdown.js'
+import { ThinkingDisclosure } from './ThinkingDisclosure.js'
+import { ToolInspector, groupToolEvents, type ToolGroup, type ToolStreamEvent } from './ToolInspector.js'
 import './Chat.css'
 
-type ToolStatus = Extract<StreamEvent, { kind: 'tool-call' | 'tool-result' }>
+type ToolEvent = ToolStreamEvent
 
 type UiMessage = ChatMessage & {
   id: string
-  tools?: ToolStatus[]
+  reasoning?: string
+  tools?: ToolGroup[]
 }
 
 function createId(): string {
   return crypto.randomUUID()
-}
-
-function formatToolArgs(args: unknown): string {
-  if (args == null) return ''
-  if (typeof args === 'string') return args
-  try {
-    return JSON.stringify(args)
-  } catch {
-    return String(args)
-  }
-}
-
-function formatToolResult(result: unknown): string {
-  if (result == null) return ''
-  if (typeof result === 'string') return result
-  try {
-    return JSON.stringify(result)
-  } catch {
-    return String(result)
-  }
 }
 
 export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
@@ -66,7 +50,7 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
     streamingRef.current = streaming
   }, [streaming])
 
-  const appendToolEvent = useCallback((event: Extract<StreamEvent, { kind: 'tool-call' | 'tool-result' }>) => {
+  const appendToolEvent = useCallback((event: ToolEvent) => {
     setMessages((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
@@ -75,12 +59,30 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
           id: createId(),
           role: 'assistant',
           content: '',
-          tools: [event],
+          tools: groupToolEvents([event]),
         })
         return next
       }
-      const tools = [...(last.tools ?? []), event]
-      next[next.length - 1] = { ...last, tools }
+      const rawEvents: ToolStreamEvent[] = []
+      for (const group of last.tools ?? []) {
+        if (group.args !== undefined) {
+          rawEvents.push({
+            kind: 'tool-call',
+            toolCallId: group.toolCallId,
+            toolName: group.toolName,
+            args: group.args,
+          })
+        }
+        if (group.result !== undefined) {
+          rawEvents.push({
+            kind: 'tool-result',
+            toolCallId: group.toolCallId,
+            result: group.result,
+          })
+        }
+      }
+      rawEvents.push(event)
+      next[next.length - 1] = { ...last, tools: groupToolEvents(rawEvents) }
       return next
     })
   }, [])
@@ -122,6 +124,28 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
             return next
           }
           next[next.length - 1] = { ...last, content: last.content + event.text }
+          return next
+        })
+        return
+      }
+
+      if (event.kind === 'reasoning-delta') {
+        setMessages((prev) => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          if (!last || last.role !== 'assistant') {
+            next.push({
+              id: createId(),
+              role: 'assistant',
+              content: '',
+              reasoning: event.text,
+            })
+            return next
+          }
+          next[next.length - 1] = {
+            ...last,
+            reasoning: (last.reasoning ?? '') + event.text,
+          }
           return next
         })
         return
@@ -222,38 +246,55 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
       <div className="chat-messages" aria-live="polite">
         {messages.length === 0 ? (
           <div className="chat-empty">
-            <h2>Start a conversation</h2>
+            <div className="chat-empty-icon" aria-hidden="true">
+              ◎
+            </div>
+            <h2>What can I help with?</h2>
             <p>
-              Add an API key in Settings, select a default model, then send a message to stream a
-              reply here.
+              Configure an API key in Settings, pick a model, then ask the agent to browse, read, or
+              act on the current tab.
             </p>
           </div>
         ) : (
           messages.map((message, index) => {
             const isStreamingAssistant =
               streaming && index === messages.length - 1 && message.role === 'assistant'
+            const hasReasoning = Boolean(message.reasoning)
+            const showThinkingLive = isStreamingAssistant && hasReasoning && !message.content
+
             return (
               <div
                 key={message.id}
-                className={`chat-bubble chat-bubble-${message.role}${
-                  isStreamingAssistant ? ' chat-bubble-streaming' : ''
-                }`}
+                className={`chat-message chat-message-${message.role}`}
               >
-                {message.tools?.map((tool) =>
-                  tool.kind === 'tool-call' ? (
-                    <div key={tool.toolCallId} className="chat-tool chat-tool-call">
-                      Calling <span className="chat-tool-name">{tool.toolName}</span>
-                      {formatToolArgs(tool.args) ? (
-                        <span className="chat-tool-detail"> {formatToolArgs(tool.args)}</span>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div key={`${tool.toolCallId}-result`} className="chat-tool chat-tool-result">
-                      Result: <span className="chat-tool-detail">{formatToolResult(tool.result)}</span>
-                    </div>
-                  ),
+                {message.role === 'assistant' && message.tools?.length ? (
+                  <ToolInspector tools={message.tools} />
+                ) : null}
+
+                {message.role === 'assistant' && hasReasoning ? (
+                  <ThinkingDisclosure
+                    content={message.reasoning ?? ''}
+                    isLive={showThinkingLive}
+                  />
+                ) : null}
+
+                {(message.content || message.role === 'user') && (
+                  <div
+                    className={`chat-bubble chat-bubble-${message.role}${
+                      isStreamingAssistant && message.content ? ' chat-bubble-streaming' : ''
+                    }`}
+                  >
+                    {message.role === 'assistant' ? (
+                      message.content ? (
+                        <MarkdownContent source={message.content} />
+                      ) : isStreamingAssistant && !hasReasoning && !message.tools?.length ? (
+                        '…'
+                      ) : null
+                    ) : (
+                      message.content
+                    )}
+                  </div>
                 )}
-                {message.content || (isStreamingAssistant ? '' : message.tools?.length ? '' : '…')}
               </div>
             )
           })
@@ -264,30 +305,32 @@ export function ChatView({ selectedAgent }: { selectedAgent?: string }) {
       {error ? <div className="chat-error">{error}</div> : null}
 
       <div className="chat-composer">
-        <textarea
-          className="chat-input"
-          rows={2}
-          placeholder="Message the agent…"
-          value={input}
-          disabled={streaming}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={onKeyDown}
-        />
-        <div className="chat-actions">
-          {streaming ? (
-            <button type="button" className="chat-btn chat-btn-stop" onClick={stop}>
-              Stop
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="chat-btn chat-btn-send"
-              disabled={!input.trim()}
-              onClick={send}
-            >
-              Send
-            </button>
-          )}
+        <div className="chat-composer-inner">
+          <textarea
+            className="chat-input"
+            rows={2}
+            placeholder="Message the agent…"
+            value={input}
+            disabled={streaming}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={onKeyDown}
+          />
+          <div className="chat-actions">
+            {streaming ? (
+              <button type="button" className="chat-btn chat-btn-stop" onClick={stop}>
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="chat-btn chat-btn-send"
+                disabled={!input.trim()}
+                onClick={send}
+              >
+                Send
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

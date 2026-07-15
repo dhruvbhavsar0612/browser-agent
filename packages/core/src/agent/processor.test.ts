@@ -3,6 +3,9 @@ import type { TextStreamPart, ToolSet } from 'ai'
 import type { StreamEvent } from '../messaging/index.js'
 import {
   DEFAULT_TOOL_RESULT_MAX_CHARS,
+  THINK_CLOSE,
+  THINK_OPEN,
+  ThinkTagParser,
   processFullStream,
   truncateToolResultDefault,
   type DurablePart,
@@ -44,7 +47,7 @@ describe('processFullStream', () => {
     expect(durable).toEqual([{ type: 'text', content: 'Hello world' }])
   })
 
-  it('maps reasoning deltas as text and persists reasoning parts', async () => {
+  it('maps reasoning deltas as reasoning-delta events and persists reasoning parts', async () => {
     const { events, durable } = await collect([
       { type: 'reasoning-start', id: 'r1' },
       { type: 'reasoning-delta', id: 'r1', text: 'think' },
@@ -52,7 +55,7 @@ describe('processFullStream', () => {
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
 
-    expect(events).toEqual([{ kind: 'text-delta', text: 'think' }])
+    expect(events).toEqual([{ kind: 'reasoning-delta', text: 'think' }])
     expect(durable).toEqual([{ type: 'reasoning', content: 'think' }])
   })
 
@@ -213,5 +216,73 @@ describe('processFullStream', () => {
     )
 
     expect(result.stopped).toBe(true)
+  })
+
+  it('strips redacted_thinking tags from text into reasoning-delta', async () => {
+    const { events } = await collect([
+      {
+        type: 'text-delta',
+        id: 't1',
+        text: `Hello ${THINK_OPEN}secret plan${THINK_CLOSE} world`,
+      },
+      { type: 'text-end', id: 't1' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    expect(events).toEqual([
+      { kind: 'text-delta', text: 'Hello ' },
+      { kind: 'reasoning-delta', text: 'secret plan' },
+      { kind: 'text-delta', text: ' world' },
+    ])
+  })
+
+  it('handles think tags split across text deltas', async () => {
+    const partialOpen = THINK_OPEN.slice(0, -1)
+    const { events } = await collect([
+      { type: 'text-delta', id: 't1', text: `A ${partialOpen}` },
+      { type: 'text-delta', id: 't1', text: `${THINK_OPEN.slice(-1)}inner${THINK_CLOSE} B` },
+      { type: 'text-end', id: 't1' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    expect(events).toEqual([
+      { kind: 'text-delta', text: 'A ' },
+      { kind: 'reasoning-delta', text: 'inner' },
+      { kind: 'text-delta', text: ' B' },
+    ])
+  })
+
+  it('never emits think tags in text output', async () => {
+    const { events } = await collect([
+      { type: 'text-delta', id: 't1', text: `${THINK_OPEN}only think${THINK_CLOSE}` },
+      { type: 'text-end', id: 't1' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    const textEvents = events.filter((e) => e.kind === 'text-delta')
+    expect(textEvents).toHaveLength(0)
+    expect(events).toContainEqual({ kind: 'reasoning-delta', text: 'only think' })
+  })
+})
+
+describe('ThinkTagParser', () => {
+  it('parses partial closing tags at chunk boundaries', () => {
+    const events: Array<{ kind: 'text' | 'reasoning'; text: string }> = []
+    const parser = new ThinkTagParser()
+    const emit = {
+      text: (text: string) => events.push({ kind: 'text', text }),
+      reasoning: (text: string) => events.push({ kind: 'reasoning', text }),
+    }
+
+    parser.process(`${THINK_OPEN}x`, emit)
+    const partialClose = THINK_CLOSE.slice(0, -1)
+    parser.process(`${partialClose}`, emit)
+    parser.process(`${THINK_CLOSE.slice(-1)}y`, emit)
+    parser.flush(emit)
+
+    expect(events).toEqual([
+      { kind: 'reasoning', text: 'x' },
+      { kind: 'text', text: 'y' },
+    ])
   })
 })

@@ -49,6 +49,7 @@ describe('stream events', () => {
   it('parses every StreamEvent kind', () => {
     const events: StreamEvent[] = [
       { kind: 'text-delta', text: 'hi' },
+      { kind: 'reasoning-delta', text: 'thinking' },
       { kind: 'tool-call', toolCallId: 't1', toolName: 'click', args: { x: 1 } },
       { kind: 'tool-result', toolCallId: 't1', result: { ok: true } },
       {

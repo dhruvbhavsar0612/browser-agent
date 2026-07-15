@@ -3,6 +3,10 @@ import type { StreamEvent } from '../messaging/index.js'
 
 export const DEFAULT_TOOL_RESULT_MAX_CHARS = 32_000
 
+const THINK_TAG = 'redacted' + '_' + 'thinking'
+export const THINK_OPEN = '<' + THINK_TAG + '>'
+export const THINK_CLOSE = '</' + THINK_TAG + '>'
+
 export type DurablePart =
   | { type: 'text'; content: string }
   | { type: 'reasoning'; content: string }
@@ -32,6 +36,77 @@ export type ProcessFullStreamOptions = {
 export type ProcessFullStreamResult = {
   finishReason?: string
   stopped: boolean
+}
+
+type ThinkEmit = {
+  text: (chunk: string) => void
+  reasoning: (chunk: string) => void
+}
+
+/** Strips `<think>…</think>` from text deltas into reasoning. */
+export class ThinkTagParser {
+  private mode: 'text' | 'thinking' = 'text'
+  private partial = ''
+
+  process(chunk: string, emit: ThinkEmit): void {
+    let input = this.partial + chunk
+    this.partial = ''
+
+    while (input.length > 0) {
+      if (this.mode === 'text') {
+        const idx = input.indexOf(THINK_OPEN)
+        if (idx === -1) {
+          const partialAt = findPartialTagSuffix(input, THINK_OPEN)
+          if (partialAt >= 0) {
+            const text = input.slice(0, partialAt)
+            if (text) emit.text(text)
+            this.partial = input.slice(partialAt)
+            return
+          }
+          emit.text(input)
+          return
+        }
+        const before = input.slice(0, idx)
+        if (before) emit.text(before)
+        input = input.slice(idx + THINK_OPEN.length)
+        this.mode = 'thinking'
+        continue
+      }
+
+      const idx = input.indexOf(THINK_CLOSE)
+      if (idx === -1) {
+        const partialAt = findPartialTagSuffix(input, THINK_CLOSE)
+        if (partialAt >= 0) {
+          const reasoning = input.slice(0, partialAt)
+          if (reasoning) emit.reasoning(reasoning)
+          this.partial = input.slice(partialAt)
+          return
+        }
+        emit.reasoning(input)
+        return
+      }
+      const inside = input.slice(0, idx)
+      if (inside) emit.reasoning(inside)
+      input = input.slice(idx + THINK_CLOSE.length)
+      this.mode = 'text'
+    }
+  }
+
+  flush(emit: ThinkEmit): void {
+    if (!this.partial) return
+    if (this.mode === 'text') emit.text(this.partial)
+    else emit.reasoning(this.partial)
+    this.partial = ''
+  }
+}
+
+function findPartialTagSuffix(input: string, tag: string): number {
+  for (let len = Math.min(tag.length - 1, input.length); len > 0; len -= 1) {
+    if (tag.startsWith(input.slice(-len))) {
+      return input.length - len
+    }
+  }
+  return -1
 }
 
 function stableJson(value: unknown): string {
@@ -88,9 +163,22 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
   let stopped = false
   let textBuffer = ''
   let reasoningBuffer = ''
+  const thinkParser = new ThinkTagParser()
 
   let lastToolKey: string | undefined
   let consecutiveToolCount = 0
+
+  const emitTextDelta = (text: string) => {
+    if (!text) return
+    options.onEvent({ kind: 'text-delta', text })
+    textBuffer += text
+  }
+
+  const emitReasoningDelta = (text: string) => {
+    if (!text) return
+    options.onEvent({ kind: 'reasoning-delta', text })
+    reasoningBuffer += text
+  }
 
   const flushText = () => {
     if (!textBuffer) return
@@ -102,6 +190,20 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
     if (!reasoningBuffer) return
     options.onPart?.({ type: 'reasoning', content: reasoningBuffer })
     reasoningBuffer = ''
+  }
+
+  const processTextChunk = (chunk: string) => {
+    thinkParser.process(chunk, {
+      text: emitTextDelta,
+      reasoning: emitReasoningDelta,
+    })
+  }
+
+  const flushThinkParser = () => {
+    thinkParser.flush({
+      text: emitTextDelta,
+      reasoning: emitReasoningDelta,
+    })
   }
 
   const checkDoomLoop = async (toolName: string, args: unknown): Promise<boolean> => {
@@ -152,30 +254,28 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
         case 'text-start':
           break
 
-        case 'text-delta': {
-          textBuffer += part.text
-          options.onEvent({ kind: 'text-delta', text: part.text })
+        case 'text-delta':
+          processTextChunk(part.text)
           break
-        }
 
         case 'text-end':
+          flushThinkParser()
           flushText()
           break
 
         case 'reasoning-start':
           break
 
-        case 'reasoning-delta': {
-          reasoningBuffer += part.text
-          options.onEvent({ kind: 'text-delta', text: part.text })
+        case 'reasoning-delta':
+          emitReasoningDelta(part.text)
           break
-        }
 
         case 'reasoning-end':
           flushReasoning()
           break
 
         case 'tool-call': {
+          flushThinkParser()
           flushText()
           flushReasoning()
 
@@ -257,6 +357,7 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
       if (stopped) break
     }
   } finally {
+    flushThinkParser()
     flushText()
     flushReasoning()
   }

@@ -3,10 +3,18 @@ import { listVisibleAgents, type AgentInfo } from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import { ChatView } from './Chat.js'
 import { SettingsView } from './Settings.js'
+import { ThemeProvider, useTheme, type ThemeMode } from './ThemeProvider.js'
 
 type View = 'chat' | 'settings'
 
-export function App() {
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'system', label: 'Auto' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+]
+
+function AppContent() {
+  const { mode, setMode } = useTheme()
   const [view, setView] = useState<View>('chat')
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking')
   const [agents, setAgents] = useState<AgentInfo[]>([])
@@ -70,14 +78,29 @@ export function App() {
             </label>
           ) : null}
         </div>
-        <div className={`status status-${status}`}>{status}</div>
+        <div className="header-end">
+          <div className="theme-toggle" role="group" aria-label="Theme">
+            {THEME_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`theme-toggle-btn${mode === opt.value ? ' active' : ''}`}
+                aria-pressed={mode === opt.value}
+                onClick={() => setMode(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div className={`status status-${status}`}>{status}</div>
+        </div>
       </header>
 
       <main className="main main-fill">
         {view === 'chat' ? <ChatView selectedAgent={selectedAgent} /> : <SettingsView />}
       </main>
 
-      <nav className="nav">
+      <nav className="nav" aria-label="Main navigation">
         <button
           type="button"
           className={`nav-item ${view === 'chat' ? 'active' : ''}`}
@@ -94,5 +117,13 @@ export function App() {
         </button>
       </nav>
     </div>
+  )
+}
+
+export function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
   )
 }

@@ -3,11 +3,13 @@ import {
   createRequest,
   type ChatMessage,
   type PartRecord,
+  type PermissionReply,
   type SessionRecord,
   type StreamEvent,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import { MarkdownContent } from './markdown.js'
+import { PermissionAskBanner, type PermissionAskRequest } from './PermissionAsk.js'
 import { ThinkingDisclosure } from './ThinkingDisclosure.js'
 import { ToolInspector, groupToolEvents, type ToolGroup, type ToolStreamEvent } from './ToolInspector.js'
 import { ManagedStreamConnection } from './stream-connection.js'
@@ -109,6 +111,8 @@ export function ChatView({
   const [streaming, setStreaming] = useState(false)
   const [loadingSession, setLoadingSession] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [permissionQueue, setPermissionQueue] = useState<PermissionAskRequest[]>([])
+  const [permissionBusy, setPermissionBusy] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<
     'connected' | 'disconnected' | 'reconnecting'
   >('connected')
@@ -218,16 +222,34 @@ export function ChatView({
         return
       }
 
+      if (event.kind === 'permission-ask') {
+        setPermissionQueue((prev) => {
+          if (prev.some((item) => item.requestId === event.requestId)) return prev
+          return [
+            ...prev,
+            {
+              requestId: event.requestId,
+              permission: event.permission,
+              patterns: event.patterns,
+              metadata: event.metadata,
+            },
+          ]
+        })
+        return
+      }
+
       if (event.kind === 'error') {
         setError(event.message)
         setStreaming(false)
         activeRequestIdRef.current = null
+        setPermissionQueue([])
         return
       }
 
       if (event.kind === 'done') {
         setStreaming(false)
         activeRequestIdRef.current = null
+        setPermissionQueue([])
         onSessionsRefresh()
       }
     },
@@ -396,12 +418,39 @@ export function ChatView({
     streaming,
   ])
 
+  const replyPermission = useCallback(async (response: PermissionReply) => {
+    const current = permissionQueue[0]
+    if (!current || permissionBusy) return
+    setPermissionBusy(true)
+    try {
+      const result = await sendRequest('permission.reply', {
+        id: current.requestId,
+        response,
+      })
+      if (result.type === 'error') {
+        setError(
+          typeof result.payload === 'object' &&
+            result.payload &&
+            'message' in result.payload
+            ? String((result.payload as { message: string }).message)
+            : 'Permission reply failed',
+        )
+      }
+      setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPermissionBusy(false)
+    }
+  }, [permissionBusy, permissionQueue])
+
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current
     if (!requestId) return
     void sendRequest('agent.stop', { id: requestId }).catch(() => undefined)
     setStreaming(false)
     activeRequestIdRef.current = null
+    setPermissionQueue([])
   }, [])
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -480,6 +529,16 @@ export function ChatView({
         <div className="chat-connection" role="status">
           {connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Connection lost — retrying'}
         </div>
+      ) : null}
+
+      {permissionQueue[0] ? (
+        <PermissionAskBanner
+          request={permissionQueue[0]}
+          busy={permissionBusy}
+          onReply={(response) => {
+            void replyPermission(response)
+          }}
+        />
       ) : null}
 
       {error ? <div className="chat-error">{error}</div> : null}

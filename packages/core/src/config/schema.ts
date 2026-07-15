@@ -93,6 +93,7 @@ export const AppConfig = z.object({
   executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
 })
 export type AppConfig = z.infer<typeof AppConfig>
+export type ExecutionMode = AppConfig['executionMode']
 
 export const DEFAULT_CONFIG: AppConfig = {
   provider: {},

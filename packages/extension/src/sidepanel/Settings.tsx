@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { AppConfigType, ProviderInfo, VaultListEntry } from '@browser-agent/core'
+import {
+  SENSITIVE_DEFAULT_RULES,
+  evaluate,
+  fromConfig,
+  rulesForExecutionMode,
+  type AppConfigType,
+  type ProviderInfo,
+  type VaultListEntry,
+} from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import './Settings.css'
 
@@ -405,6 +413,223 @@ export function SettingsView() {
           </div>
         ) : null}
       </section>
+
+      <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
     </div>
+  )
+}
+
+type SiteRuleDraft = {
+  permission: string
+  pattern: string
+  action: 'allow' | 'ask' | 'deny'
+}
+
+function permissionToDrafts(permission: AppConfigType['permission']): SiteRuleDraft[] {
+  if (typeof permission === 'string') {
+    return [{ permission: '*', pattern: '*', action: permission }]
+  }
+  const drafts: SiteRuleDraft[] = []
+  for (const [tool, value] of Object.entries(permission ?? {})) {
+    if (typeof value === 'string') {
+      drafts.push({ permission: tool, pattern: '*', action: value })
+    } else if (value && typeof value === 'object') {
+      for (const [pattern, action] of Object.entries(value)) {
+        drafts.push({
+          permission: tool,
+          pattern,
+          action: action as SiteRuleDraft['action'],
+        })
+      }
+    }
+  }
+  return drafts
+}
+
+function draftsToPermission(drafts: SiteRuleDraft[]): AppConfigType['permission'] {
+  const next: Record<string, 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>> =
+    {}
+  for (const draft of drafts) {
+    const permission = draft.permission.trim() || '*'
+    const pattern = draft.pattern.trim() || '*'
+    if (pattern === '*') {
+      next[permission] = draft.action
+      continue
+    }
+    const existing = next[permission]
+    if (!existing || typeof existing === 'string') {
+      next[permission] = {
+        ...(typeof existing === 'string' ? { '*': existing } : {}),
+        [pattern]: draft.action,
+      }
+    } else {
+      existing[pattern] = draft.action
+    }
+  }
+  return next
+}
+
+function SiteRulesSection({
+  config,
+  onConfig,
+  setError,
+}: {
+  config: AppConfigType | null
+  onConfig: (config: AppConfigType) => void
+  setError: (error: string | null) => void
+}) {
+  const [drafts, setDrafts] = useState<SiteRuleDraft[]>([])
+  const [saving, setSaving] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState('https://example.com/checkout')
+  const [previewTool, setPreviewTool] = useState('click')
+
+  useEffect(() => {
+    if (!config) return
+    setDrafts(permissionToDrafts(config.permission))
+  }, [config])
+
+  const previewAction = useMemo(() => {
+    const rules = [
+      ...rulesForExecutionMode(config?.executionMode ?? 'approval'),
+      ...fromConfig(draftsToPermission(drafts)),
+      ...SENSITIVE_DEFAULT_RULES,
+    ]
+    return evaluate(previewTool, previewUrl, rules).action
+  }, [config?.executionMode, drafts, previewTool, previewUrl])
+
+  const save = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      const permission = draftsToPermission(drafts)
+      const res = await sendRequest('config.set', { permission })
+      if (res.type === 'error') {
+        throw new Error(String((res.payload as { message?: string })?.message))
+      }
+      onConfig(res.payload as AppConfigType)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h2>Site permission rules</h2>
+      <p className="settings-hint">
+        URL globs per tool. Sensitive paths (checkout / payment / login) are denied by default and
+        always win.
+      </p>
+
+      <div className="settings-rules">
+        {drafts.map((draft, index) => (
+          <div className="settings-rule-row" key={`${draft.permission}-${index}`}>
+            <input
+              className="settings-input"
+              value={draft.permission}
+              placeholder="click"
+              aria-label="Permission"
+              onChange={(e) =>
+                setDrafts((prev) =>
+                  prev.map((item, i) =>
+                    i === index ? { ...item, permission: e.target.value } : item,
+                  ),
+                )
+              }
+            />
+            <input
+              className="settings-input"
+              value={draft.pattern}
+              placeholder="https://github.com/*"
+              aria-label="URL pattern"
+              onChange={(e) =>
+                setDrafts((prev) =>
+                  prev.map((item, i) =>
+                    i === index ? { ...item, pattern: e.target.value } : item,
+                  ),
+                )
+              }
+            />
+            <select
+              className="settings-select"
+              value={draft.action}
+              aria-label="Action"
+              onChange={(e) =>
+                setDrafts((prev) =>
+                  prev.map((item, i) =>
+                    i === index
+                      ? { ...item, action: e.target.value as SiteRuleDraft['action'] }
+                      : item,
+                  ),
+                )
+              }
+            >
+              <option value="allow">allow</option>
+              <option value="ask">ask</option>
+              <option value="deny">deny</option>
+            </select>
+            <button
+              type="button"
+              className="settings-btn settings-btn-danger"
+              aria-label="Remove rule"
+              onClick={() => setDrafts((prev) => prev.filter((_, i) => i !== index))}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="settings-row">
+        <button
+          type="button"
+          className="settings-btn"
+          onClick={() =>
+            setDrafts((prev) => [
+              ...prev,
+              { permission: 'click', pattern: 'https://github.com/*', action: 'deny' },
+            ])
+          }
+        >
+          Add rule
+        </button>
+        <button
+          type="button"
+          className="settings-btn settings-btn-primary"
+          disabled={saving}
+          onClick={() => void save()}
+        >
+          {saving ? 'Saving…' : 'Save rules'}
+        </button>
+      </div>
+
+      <div className="settings-field">
+        <label htmlFor="rule-preview-url">Match preview</label>
+        <div className="settings-rule-preview">
+          <select
+            className="settings-select"
+            value={previewTool}
+            onChange={(e) => setPreviewTool(e.target.value)}
+            aria-label="Preview tool"
+          >
+            {['click', 'type', 'navigate', 'page_read'].map((tool) => (
+              <option key={tool} value={tool}>
+                {tool}
+              </option>
+            ))}
+          </select>
+          <input
+            id="rule-preview-url"
+            className="settings-input"
+            value={previewUrl}
+            onChange={(e) => setPreviewUrl(e.target.value)}
+          />
+          <span className={`settings-preview-action settings-preview-${previewAction}`}>
+            {previewAction}
+          </span>
+        </div>
+      </div>
+    </section>
   )
 }

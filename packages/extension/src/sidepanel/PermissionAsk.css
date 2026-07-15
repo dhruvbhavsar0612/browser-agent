@@ -1,0 +1,102 @@
+.permission-ask {
+  margin: 0 14px 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 80%, var(--bg-elevated));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: message-fade-in var(--motion-medium) var(--ease-out) both;
+}
+
+.permission-ask-doom {
+  border-color: color-mix(in srgb, var(--err) 40%, var(--border));
+}
+
+.permission-ask-copy h3 {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.permission-ask-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.permission-ask-patterns {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.permission-ask-patterns code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg-subtle);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.permission-ask-meta {
+  margin-top: 6px !important;
+  font-size: 11px !important;
+  color: var(--muted) !important;
+}
+
+.permission-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.permission-ask-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.permission-ask-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.permission-ask-once {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.permission-ask-always:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+  color: var(--ok);
+}
+
+.permission-ask-reject {
+  color: var(--err);
+}
+
+.permission-ask-reject:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+}

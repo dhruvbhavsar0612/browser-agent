@@ -182,3 +182,56 @@
   font-size: 10px;
   color: var(--text);
 }
+
+.settings-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.settings-rule-row {
+  display: grid;
+  grid-template-columns: 0.7fr 1.4fr 0.7fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.settings-rule-preview {
+  display: grid;
+  grid-template-columns: 0.7fr 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.settings-preview-action {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.settings-preview-allow {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+
+.settings-preview-ask {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.settings-preview-deny {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 40%, var(--border));
+}
+
+@media (max-width: 420px) {
+  .settings-rule-row,
+  .settings-rule-preview {
+    grid-template-columns: 1fr;
+  }
+}

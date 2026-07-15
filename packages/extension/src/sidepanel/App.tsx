@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   listVisibleAgents,
   type AgentInfo,
+  type AppConfigType,
+  type ExecutionMode,
   type SessionRecord,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
@@ -18,6 +20,12 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ]
 
+const EXECUTION_OPTIONS: { value: ExecutionMode; label: string; title: string }[] = [
+  { value: 'plan', label: 'Plan', title: 'Read-only — blocks click/type/navigate' },
+  { value: 'approval', label: 'Ask', title: 'Prompt before write actions' },
+  { value: 'auto', label: 'Auto', title: 'Allow tools unless denied by rules' },
+]
+
 function AppContent() {
   const { mode, setMode } = useTheme()
   const [view, setView] = useState<View>('chat')
@@ -26,6 +34,7 @@ function AppContent() {
   const [selectedAgent, setSelectedAgent] = useState('browse')
   const [sessions, setSessions] = useState<SessionRecord[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('approval')
 
   const refreshSessions = useCallback(() => {
     void sendRequest('session.list')
@@ -56,9 +65,10 @@ function AppContent() {
     void sendRequest('config.get')
       .then((response) => {
         if (cancelled || response.type === 'error') return
-        const config = response.payload as Parameters<typeof listVisibleAgents>[0]
+        const config = response.payload as AppConfigType
         const visible = listVisibleAgents(config)
         setAgents(visible)
+        if (config.executionMode) setExecutionMode(config.executionMode)
         if (visible.some((agent) => agent.name === 'browse')) {
           setSelectedAgent('browse')
         } else if (visible[0]) {
@@ -69,6 +79,11 @@ function AppContent() {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  const saveExecutionMode = useCallback((next: ExecutionMode) => {
+    setExecutionMode(next)
+    void sendRequest('config.set', { executionMode: next }).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -138,6 +153,20 @@ function AppContent() {
           ) : null}
         </div>
         <div className="header-end">
+          <div className="theme-toggle" role="group" aria-label="Execution mode">
+            {EXECUTION_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`theme-toggle-btn${executionMode === opt.value ? ' active' : ''}`}
+                aria-pressed={executionMode === opt.value}
+                title={opt.title}
+                onClick={() => saveExecutionMode(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <div className="theme-toggle" role="group" aria-label="Theme">
             {THEME_OPTIONS.map((opt) => (
               <button

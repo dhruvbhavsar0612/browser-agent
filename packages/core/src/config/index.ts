@@ -16,6 +16,7 @@ export type {
   PermissionConfig as PermissionConfigType,
   PermissionAction as PermissionActionType,
   McpServerConfig as McpServerConfigType,
+  ExecutionMode,
 } from './schema.js'
 export { ConfigService } from './service.js'
 export {

@@ -265,13 +265,8 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
       count: consecutiveToolCount,
     })
 
-    options.onEvent({
-      kind: 'permission-ask',
-      requestId: crypto.randomUUID(),
-      permission: 'doom_loop',
-      patterns: [toolName],
-      metadata: { toolName, args, count: consecutiveToolCount },
-    })
+    // UI ask is emitted by PermissionEngine.onAsk inside onDetect — do not emit a
+    // second orphan permission-ask with a different requestId here.
 
     if (decision === 'stop') {
       stopped = true

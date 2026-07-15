@@ -19,6 +19,7 @@ import {
   createResponse,
 } from '@browser-agent/core'
 import { createBrowserBridge } from '../browser/bridge.js'
+import { detachAll } from '../browser/debugger.js'
 import { bindSessionTab, getBoundTabId } from '../browser/session-tab.js'
 import { startKeepalive, stopKeepalive, type MessageBus } from '../bus.js'
 
@@ -50,6 +51,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
     const runId = payload.id ?? message.id
     activeRuns.get(runId)?.abort()
     activeRuns.delete(runId)
+    void detachAll()
     return createResponse(message, 'agent.stop', { ok: true })
   })
 

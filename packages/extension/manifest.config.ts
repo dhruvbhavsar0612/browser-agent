@@ -28,7 +28,7 @@ export default defineManifest({
   side_panel: {
     default_path: 'src/sidepanel/index.html',
   },
-  permissions: ['sidePanel', 'storage', 'activeTab', 'scripting', 'tabs', 'alarms'],
+  permissions: ['sidePanel', 'storage', 'activeTab', 'scripting', 'tabs', 'alarms', 'debugger'],
   // BYOK APIs + page_screenshot: activeTab + tabs + host_permissions suffice for
   // chrome.tabs.captureVisibleTab (no <all_urls> or chrome.debugger).
   host_permissions: ['https://*/*', 'http://*/*'],

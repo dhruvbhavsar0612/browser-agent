@@ -12,7 +12,8 @@
     "lint": "turbo run lint",
     "format": "prettier --write .",
     "pack:extension": "node scripts/pack-extension.mjs",
-    "sync:version": "node scripts/sync-version.mjs"
+    "sync:version": "node scripts/sync-version.mjs",
+    "update:models-snapshot": "node scripts/update-models-snapshot.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

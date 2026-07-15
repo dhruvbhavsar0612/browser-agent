@@ -9,10 +9,16 @@ describe('models.dev', () => {
     expect(providers.length).toBeGreaterThan(0)
     const anthropic = providers.find((p) => p.id === 'anthropic')
     expect(anthropic?.models[0]?.toolCall).toBe(true)
-    expect(anthropic?.models[0]?.vision).toBe(true)
+    expect(anthropic?.models.some((m) => m.vision)).toBe(true)
+    expect(anthropic?.models.some((m) => m.id.includes('claude-sonnet-4-5'))).toBe(true)
+
+    const openai = providers.find((p) => p.id === 'openai')
+    expect(openai?.models.some((m) => m.id.startsWith('gpt-5'))).toBe(true)
+
     const google = providers.find((p) => p.id === 'google')
     expect(google?.name).toMatch(/AI Studio|Google/i)
     expect(google?.models.some((m) => m.id.startsWith('gemini-'))).toBe(true)
+    expect(google?.models.length).toBeGreaterThanOrEqual(10)
   })
 
   it('caches network catalog and respects TTL', async () => {

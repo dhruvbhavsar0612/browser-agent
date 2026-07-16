@@ -37,7 +37,10 @@ Return a11y tree of current session tab. Params: `{ tabId?, filter?: "interactiv
 Search visible text and labels. Params: `{ pattern, tabId? }`. Permission: `grep_page`.
 
 ### `page_screenshot`
-Capture viewport or element. Params: `{ tabId?, ref_id?, format?: "jpeg" | "png" }`. Permission: `screenshot`. Requires vision model or auxiliary vision call.
+Capture viewport. Params: `{ tabId?, format?: "jpeg" | "png" }`. Permission: `screenshot`.
+Uses CDP `Page.captureScreenshot` first, then `chrome.tabs.captureVisibleTab` fallback (requires
+`<all_urls>` host permission for agent-driven captures without an `activeTab` gesture).
+Requires a vision model or auxiliary vision call to interpret the image.
 
 ### `console_log`
 Recent console output from tab. Params: `{ tabId?, limit? }`. Permission: `console`.

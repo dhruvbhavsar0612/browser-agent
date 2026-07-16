@@ -3,6 +3,7 @@ import {
   MissingApiKeyError,
   PermissionEngine,
   buildRunRuleset,
+  appendBrowserToolSkill,
   createMcpAiSdkTools,
   credentialSecretToApiKey,
   filterToolsByPermission,
@@ -194,7 +195,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
       }
       const availableTools = filterToolsByPermission(listTools(), ruleset)
 
-      let systemPrompt = agentInfo?.prompt
+      let systemPrompt = appendBrowserToolSkill(agentInfo?.prompt, agentName)
       if (boundTabId != null) {
         const tab = await browserBridge.tabsGet(boundTabId)
         if (tab) {

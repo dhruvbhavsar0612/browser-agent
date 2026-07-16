@@ -395,9 +395,45 @@
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
 
+.tool-status-error {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, var(--border));
+}
+
 .tool-status-done {
   color: var(--ok);
   border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+}
+
+.tool-row-running {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+
+.tool-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: tool-spin 0.7s linear infinite;
+}
+
+@keyframes tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.chat-activity {
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .tool-details {

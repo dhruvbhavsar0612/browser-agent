@@ -126,6 +126,103 @@ describe('processFullStream', () => {
     ])
   })
 
+  it('emits an early pending tool-call on tool-input-start', async () => {
+    const { events, durable } = await collect([
+      {
+        type: 'tool-input-start',
+        id: 'c1',
+        toolName: 'page_screenshot',
+      },
+      {
+        type: 'tool-call',
+        toolCallId: 'c1',
+        toolName: 'page_screenshot',
+        input: { format: 'jpeg' },
+        dynamic: true,
+      },
+      {
+        type: 'tool-result',
+        toolCallId: 'c1',
+        toolName: 'page_screenshot',
+        input: { format: 'jpeg' },
+        output: { ok: true },
+        dynamic: true,
+      },
+      {
+        type: 'finish',
+        finishReason: 'tool-calls',
+        rawFinishReason: 'tool-calls',
+        totalUsage: {} as never,
+      },
+    ])
+
+    expect(events.filter((event) => event.kind === 'tool-call')).toEqual([
+      {
+        kind: 'tool-call',
+        segmentId: 'tool-1',
+        toolCallId: 'c1',
+        toolName: 'page_screenshot',
+        args: undefined,
+      },
+      {
+        kind: 'tool-call',
+        segmentId: 'tool-1',
+        toolCallId: 'c1',
+        toolName: 'page_screenshot',
+        args: { format: 'jpeg' },
+      },
+    ])
+    expect(durable).toHaveLength(2)
+    expect(durable[0]).toMatchObject({
+      id: 'tool-1',
+      type: 'tool-call',
+      content: { toolCallId: 'c1', toolName: 'page_screenshot', args: { format: 'jpeg' } },
+    })
+  })
+
+  it('marks tool-error results with isError for the UI', async () => {
+    const { events } = await collect([
+      {
+        type: 'tool-call',
+        toolCallId: 'c1',
+        toolName: 'page_screenshot',
+        input: {},
+        dynamic: true,
+      },
+      {
+        type: 'tool-error',
+        toolCallId: 'c1',
+        toolName: 'page_screenshot',
+        input: {},
+        error: new Error("Either the '<all_urls>' or 'activeTab' permission is required."),
+        dynamic: true,
+      },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        totalUsage: {} as never,
+      },
+    ])
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'tool-result',
+          toolCallId: 'c1',
+          isError: true,
+          result: {
+            error: "Either the '<all_urls>' or 'activeTab' permission is required.",
+          },
+        }),
+        expect.objectContaining({
+          kind: 'error',
+          message: "Either the '<all_urls>' or 'activeTab' permission is required.",
+        }),
+      ]),
+    )
+  })
+
   it('preserves text → tool → text chronology in events and durable parts', async () => {
     const { events, durable } = await collect([
       { type: 'text-delta', id: 't1', text: 'Before' },

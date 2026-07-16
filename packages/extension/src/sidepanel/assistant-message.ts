@@ -150,6 +150,7 @@ export function reduceAssistantSegments(
           segment.type === 'tool' &&
           (segment.id === event.segmentId || segment.toolCallId === event.toolCallId),
       )
+      const status = event.isError ? ('error' as const) : ('done' as const)
       if (index < 0) {
         return [
           ...completeStreamingSegments(segments),
@@ -159,13 +160,13 @@ export function reduceAssistantSegments(
             toolCallId: event.toolCallId,
             toolName: 'tool',
             result: event.result,
-            status: 'done',
+            status,
           },
         ]
       }
       return segments.map((segment, segmentIndex) =>
         segmentIndex === index && segment.type === 'tool'
-          ? { ...segment, result: event.result, status: 'done' }
+          ? { ...segment, result: event.result, status }
           : segment,
       )
     }

@@ -42,9 +42,10 @@ export default defineManifest({
     'clipboardRead',
     'clipboardWrite',
   ],
-  // BYOK APIs + page_screenshot: activeTab + tabs + host_permissions suffice for
-  // chrome.tabs.captureVisibleTab (no <all_urls> or chrome.debugger).
-  host_permissions: ['https://*/*', 'http://*/*'],
+  // `<all_urls>` is required for chrome.tabs.captureVisibleTab without an
+  // activeTab user gesture (agent-driven screenshots). CDP Page.captureScreenshot
+  // is preferred; this remains the fallback host grant.
+  host_permissions: ['<all_urls>'],
   content_scripts: [
     {
       matches: ['https://*/*', 'http://*/*'],

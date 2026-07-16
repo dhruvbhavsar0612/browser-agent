@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 export type ToolStreamEvent =
   | { kind: 'tool-call'; toolCallId: string; toolName: string; args?: unknown }
@@ -23,30 +23,42 @@ function formatJson(value: unknown): string {
 }
 
 function ToolRow({ tool }: { tool: ToolGroup }) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(tool.status === 'pending')
   const panelId = useId()
   const hasDetails = tool.args != null || tool.result != null
+  const running = tool.status === 'pending'
+
+  useEffect(() => {
+    if (running) setExpanded(true)
+  }, [running])
 
   return (
-    <div className="tool-row">
+    <div className={`tool-row${running ? ' tool-row-running' : ''}`} aria-busy={running}>
       <button
         type="button"
         className="tool-toggle"
         aria-expanded={expanded}
         aria-controls={hasDetails ? panelId : undefined}
-        disabled={!hasDetails}
+        disabled={!hasDetails && !running}
         onClick={() => setExpanded((prev) => !prev)}
       >
         <span className="tool-chevron" aria-hidden="true">
           ▶
         </span>
+        {running ? <span className="tool-spinner" aria-hidden="true" /> : null}
         <span className="tool-name">{tool.toolName}</span>
         <span className={`tool-status tool-status-${tool.status}`}>
           {tool.status === 'pending' ? 'Running' : tool.status === 'error' ? 'Error' : 'Done'}
         </span>
       </button>
-      {expanded && hasDetails ? (
+      {expanded && (hasDetails || running) ? (
         <div id={panelId} className="tool-details">
+          {running && tool.args == null && tool.result == null ? (
+            <div className="tool-detail-block">
+              <span className="tool-detail-label">Status</span>
+              <pre className="tool-detail-code">Working in the background…</pre>
+            </div>
+          ) : null}
           {tool.args != null ? (
             <div className="tool-detail-block">
               <span className="tool-detail-label">Arguments</span>
@@ -92,12 +104,16 @@ export function groupToolEvents(events: ToolStreamEvent[]): ToolGroup[] {
       })
     } else {
       const existing = map.get(event.toolCallId)
+      const isError =
+        event.result != null &&
+        typeof event.result === 'object' &&
+        'error' in (event.result as object)
       map.set(event.toolCallId, {
         toolCallId: event.toolCallId,
         toolName: existing?.toolName ?? 'tool',
         args: existing?.args,
         result: event.result,
-        status: 'done',
+        status: isError ? 'error' : 'done',
       })
     }
   }

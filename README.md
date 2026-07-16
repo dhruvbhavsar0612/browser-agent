@@ -71,7 +71,7 @@ OpenAI-compatible endpoints (e.g. OpenCode Zen) work: set **Base URL** + key in 
 | `page_read` | Accessibility tree with `ref_N` ids |
 | `page_grep` | Search page text / labels |
 | `navigate` | Go to URL (allowed on **act**; denied on **browse**) |
-| `page_screenshot` | Viewport capture (`captureVisibleTab`) |
+| `page_screenshot` | Viewport capture (CDP `Page.captureScreenshot`, `captureVisibleTab` fallback) |
 
 ## CI & releases
 

@@ -3,11 +3,16 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      # Preferred: v0.4.5 (historical convention)
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+      # Also accept GitHub UI tags without the leading v (0.4.5)
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create/release (e.g. v0.1.0). Leave empty to use the current ref.'
+        description: 'Tag to create/release (e.g. v0.4.5 or 0.4.5). Leave empty to use the current ref.'
         required: false
         type: string
 
@@ -34,23 +39,29 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
-            TAG="${{ inputs.tag }}"
+            RAW="${{ inputs.tag }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
+            RAW="${GITHUB_REF#refs/tags/}"
           else
-            echo "No tag provided. Push a v* tag or pass workflow_dispatch input.tag."
+            echo "No tag provided. Push a v* (or semver) tag, or pass workflow_dispatch input.tag."
             exit 1
           fi
 
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "Tag must look like v0.1.0 (optional prerelease suffix)."
+          # Normalize: always publish as vX.Y.Z even if the pushed tag omitted "v".
+          if [[ "$RAW" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            TAG="$RAW"
+          elif [[ "$RAW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            TAG="v$RAW"
+          else
+            echo "Tag must look like v0.4.5 or 0.4.5 (optional prerelease suffix)."
             exit 1
           fi
 
           VERSION="${TAG#v}"
+          echo "raw=$RAW" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Resolved release $TAG ($VERSION)"
+          echo "Resolved release $TAG ($VERSION) from input/ref '$RAW'"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -86,6 +97,7 @@ jobs:
           name: Browser Agent ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           draft: false
+          make_latest: true
           prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
           files: |
             release/browser-agent-extension-${{ steps.version.outputs.version }}.zip

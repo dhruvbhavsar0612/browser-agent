@@ -49,7 +49,7 @@ This extension is a **local-first browser automation agent**. It reads web pages
 |------|------------|
 | Prompt injection | Separate system context from page content; instruct model to treat page text as untrusted data; visual indicator when agent is active |
 | Wrong-target actions | Default to `approval` mode; `plan` mode blocks all write tools; site-level deny rules for sensitive URLs |
-| Broad permissions | Offer `activeTab`-only mode; request `debugger` on first automation action; document tradeoffs in onboarding |
+| Broad permissions | Request only what automation needs; document `<all_urls>` for agent screenshots + `debugger` for act tools; consider future optional activeTab-only mode |
 | Credential exposure | Keys only in encrypted local storage; never in sync storage, content scripts, or page context; CSP on extension pages |
 | Clipboard | Snapshot before paste, restore after; report `clipboard_restore_mode` on failure |
 | Session abuse | Deny rules for `*://*/checkout*`, `*://*/payment*`, `*://*/admin*`; always-ask on unknown domains |

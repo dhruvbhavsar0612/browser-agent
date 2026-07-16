@@ -1,4 +1,5 @@
 import type { ScreenshotResult, TabInfo } from '@browser-agent/core'
+import * as cdp from './debugger.js'
 
 const MAX_SCREENSHOT_BYTES = 1024 * 1024
 const DEFAULT_JPEG_QUALITY = 80
@@ -37,6 +38,17 @@ function base64ByteLength(dataBase64: string): number {
   return Math.floor((dataBase64.length * 3) / 4) - padding
 }
 
+function toScreenshotResult(
+  mimeType: 'image/jpeg' | 'image/png',
+  dataBase64: string,
+): ScreenshotResult {
+  return {
+    mimeType,
+    dataBase64,
+    byteLength: base64ByteLength(dataBase64),
+  }
+}
+
 export async function waitForTabLoad(tabId: number, timeoutMs = 30_000): Promise<void> {
   const tab = await chrome.tabs.get(tabId)
   if (tab.status === 'complete') {
@@ -68,6 +80,39 @@ export async function navigateTab(tabId: number, url: string): Promise<TabInfo> 
   return toTabInfo(tab)
 }
 
+async function captureViaCdp(
+  tabId: number,
+  format: 'jpeg' | 'png',
+  quality: number,
+): Promise<ScreenshotResult> {
+  const result = await cdp.sendCommand<{ data: string }>(tabId, 'Page.captureScreenshot', {
+    format: format === 'png' ? 'png' : 'jpeg',
+    quality: format === 'jpeg' ? quality : undefined,
+    fromSurface: true,
+  })
+  if (!result.data) {
+    throw new Error('CDP Page.captureScreenshot returned empty data')
+  }
+  return toScreenshotResult(format === 'png' ? 'image/png' : 'image/jpeg', result.data)
+}
+
+async function captureViaVisibleTab(
+  windowId: number,
+  format: 'jpeg' | 'png',
+  quality: number,
+): Promise<ScreenshotResult> {
+  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+    format: format === 'png' ? 'png' : 'jpeg',
+    quality: format === 'jpeg' ? quality : undefined,
+  })
+  const { mimeType, dataBase64 } = parseDataUrl(dataUrl)
+  return toScreenshotResult(mimeType, dataBase64)
+}
+
+/**
+ * Prefer CDP capture (works with host permissions + debugger, no activeTab gesture).
+ * Fall back to captureVisibleTab when CDP attach is unavailable.
+ */
 export async function captureTabScreenshot(
   tabId: number,
   opts?: { format?: 'jpeg' | 'png'; quality?: number },
@@ -86,17 +131,41 @@ export async function captureTabScreenshot(
   }
 
   let last: ScreenshotResult | undefined
+  let lastError: unknown
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: format === 'png' ? 'png' : 'jpeg',
-      quality: format === 'jpeg' ? quality : undefined,
-    })
-    const { mimeType, dataBase64 } = parseDataUrl(dataUrl)
-    const byteLength = base64ByteLength(dataBase64)
-    last = { mimeType, dataBase64, byteLength }
+    try {
+      last = await captureViaCdp(tabId, format, quality)
+      lastError = undefined
+    } catch (cdpError) {
+      lastError = cdpError
+      try {
+        last = await captureViaVisibleTab(tab.windowId, format, quality)
+        lastError = undefined
+      } catch (visibleError) {
+        lastError = visibleError
+        const message =
+          visibleError instanceof Error ? visibleError.message : String(visibleError)
+        if (
+          message.includes("'<all_urls>'") ||
+          message.includes('activeTab') ||
+          message.includes('Cannot access')
+        ) {
+          throw new Error(
+            `Screenshot failed: ${message}. CDP fallback also failed (${
+              cdpError instanceof Error ? cdpError.message : String(cdpError)
+            }). Reload the extension after updating, then retry on an http(s) page.`,
+          )
+        }
+        throw visibleError
+      }
+    }
 
-    if (byteLength <= MAX_SCREENSHOT_BYTES) {
+    if (!last) {
+      break
+    }
+
+    if (last.byteLength <= MAX_SCREENSHOT_BYTES) {
       return last
     }
 
@@ -113,5 +182,8 @@ export async function captureTabScreenshot(
     quality = Math.max(MIN_JPEG_QUALITY, quality - 15)
   }
 
-  return last ?? { mimeType: 'image/jpeg', dataBase64: '', byteLength: 0 }
+  if (last) return last
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(lastError ? String(lastError) : 'Screenshot capture failed')
 }

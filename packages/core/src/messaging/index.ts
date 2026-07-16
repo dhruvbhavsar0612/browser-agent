@@ -130,6 +130,7 @@ export const StreamEvent = z.discriminatedUnion('kind', [
     toolCallId: z.string(),
     result: z.unknown(),
     segmentId: z.string().optional(),
+    isError: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal('permission-ask'),

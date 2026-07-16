@@ -100,6 +100,31 @@ describe('reduceAssistantSegments', () => {
     })
   })
 
+  it('marks failed tools as error status', () => {
+    const segments = reduce([
+      {
+        kind: 'tool-call',
+        segmentId: 'tool-1',
+        toolCallId: 'call-1',
+        toolName: 'page_screenshot',
+        args: {},
+      },
+      {
+        kind: 'tool-result',
+        segmentId: 'tool-1',
+        toolCallId: 'call-1',
+        result: { error: 'permission required' },
+        isError: true,
+      },
+    ])
+
+    expect(segments[0]).toMatchObject({
+      type: 'tool',
+      status: 'error',
+      result: { error: 'permission required' },
+    })
+  })
+
   it('treats compaction events as status metadata, not assistant content', () => {
     const before = reduce([{ kind: 'text-delta', segmentId: 'text-1', text: 'Answer' }])
     const after = reduceAssistantSegments(before, {

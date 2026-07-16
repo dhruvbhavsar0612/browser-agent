@@ -405,6 +405,23 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
           await closeContent()
           break
 
+        case 'tool-input-start': {
+          // Show Running in the UI as soon as the model starts a tool call,
+          // before argument streaming / execution completes.
+          await flushThinkParser(true)
+          await closeContent()
+          const segmentId = createSegmentId('tool')
+          toolSegments.set(part.id, segmentId)
+          options.onEvent({
+            kind: 'tool-call',
+            segmentId,
+            toolCallId: part.id,
+            toolName: part.toolName,
+            args: undefined,
+          })
+          break
+        }
+
         case 'tool-call': {
           await flushThinkParser(true)
           await closeContent()
@@ -414,7 +431,7 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
             break
           }
 
-          const segmentId = createSegmentId('tool')
+          const segmentId = toolSegments.get(part.toolCallId) ?? createSegmentId('tool')
           toolSegments.set(part.toolCallId, segmentId)
           options.onEvent({
             kind: 'tool-call',
@@ -423,6 +440,8 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
             toolName: part.toolName,
             args,
           })
+          // Yield so the side panel can paint "Running" before long tool work.
+          await Promise.resolve()
           await options.onPart?.({
             id: segmentId,
             type: 'tool-call',
@@ -467,6 +486,7 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
             segmentId,
             toolCallId: part.toolCallId,
             result,
+            isError: true,
           })
           await options.onPart?.({
             type: 'tool-result',

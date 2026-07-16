@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { captureTabScreenshot, navigateTab } from './navigate-screenshot.js'
+
+const sendCommand = vi.fn()
+
+vi.mock('./debugger.js', () => ({
+  sendCommand: (...args: unknown[]) => sendCommand(...args),
+}))
 
 describe('navigate-screenshot bridge', () => {
   const listeners: Array<(tabId: number, info: chrome.tabs.TabChangeInfo) => void> = []
 
-  beforeEach(() => {
+  beforeEach(async () => {
     listeners.length = 0
+    sendCommand.mockReset()
+    sendCommand.mockResolvedValue({ data: 'QUJD' })
     vi.stubGlobal('chrome', {
       tabs: {
         get: vi.fn(async (tabId: number) => ({
@@ -20,7 +27,7 @@ describe('navigate-screenshot bridge', () => {
           id: tabId,
           title: 'Test',
           url: props.url ?? 'https://example.com',
-          active: props.active ?? true,
+          active: props.active ?? false,
           windowId: 1,
         })),
         captureVisibleTab: vi.fn(async (): Promise<string> => 'data:image/jpeg;base64,QUJD'),
@@ -28,25 +35,29 @@ describe('navigate-screenshot bridge', () => {
           addListener: vi.fn((listener: (tabId: number, info: chrome.tabs.TabChangeInfo) => void) => {
             listeners.push(listener)
           }),
-          removeListener: vi.fn((listener: (tabId: number, info: chrome.tabs.TabChangeInfo) => void) => {
-            const index = listeners.indexOf(listener)
-            if (index >= 0) listeners.splice(index, 1)
-          }),
+          removeListener: vi.fn(
+            (listener: (tabId: number, info: chrome.tabs.TabChangeInfo) => void) => {
+              const index = listeners.indexOf(listener)
+              if (index >= 0) listeners.splice(index, 1)
+            },
+          ),
         },
       },
     })
   })
 
   it('navigates a tab and waits for load completion', async () => {
-    vi.mocked(chrome.tabs.get).mockImplementation(async (tabId) =>
-      ({
-        id: tabId,
-        title: 'Test',
-        url: 'https://example.com/new',
-        active: true,
-        status: 'loading',
-        windowId: 1,
-      }) as chrome.tabs.Tab,
+    const { navigateTab } = await import('./navigate-screenshot.js')
+    vi.mocked(chrome.tabs.get).mockImplementation(
+      async (tabId) =>
+        ({
+          id: tabId,
+          title: 'Test',
+          url: 'https://example.com/new',
+          active: true,
+          status: 'loading',
+          windowId: 1,
+        }) as chrome.tabs.Tab,
     )
 
     const navigatePromise = navigateTab(5, 'https://example.com/new')
@@ -61,31 +72,47 @@ describe('navigate-screenshot bridge', () => {
     expect(tab).toMatchObject({ id: 5, url: 'https://example.com/new' })
   })
 
-  it('captures a JPEG screenshot via captureVisibleTab', async () => {
+  it('captures via CDP Page.captureScreenshot first', async () => {
+    const { captureTabScreenshot } = await import('./navigate-screenshot.js')
+    const shot = await captureTabScreenshot(3)
+
+    expect(sendCommand).toHaveBeenCalledWith(3, 'Page.captureScreenshot', {
+      format: 'jpeg',
+      quality: 80,
+      fromSurface: true,
+    })
+    expect(chrome.tabs.captureVisibleTab).not.toHaveBeenCalled()
+    expect(shot.mimeType).toBe('image/jpeg')
+    expect(shot.dataBase64).toBe('QUJD')
+    expect(shot.byteLength).toBeGreaterThan(0)
+  })
+
+  it('falls back to captureVisibleTab when CDP fails', async () => {
+    sendCommand.mockRejectedValueOnce(new Error('debugger attach failed'))
+    const { captureTabScreenshot } = await import('./navigate-screenshot.js')
     const shot = await captureTabScreenshot(3)
 
     expect(chrome.tabs.captureVisibleTab).toHaveBeenCalledWith(1, {
       format: 'jpeg',
       quality: 80,
     })
-    expect(shot.mimeType).toBe('image/jpeg')
     expect(shot.dataBase64).toBe('QUJD')
-    expect(shot.byteLength).toBeGreaterThan(0)
   })
 
   it('lowers JPEG quality when the screenshot exceeds the size cap', async () => {
     const largeBase64 = 'A'.repeat(1_400_000)
-    const capture = chrome.tabs.captureVisibleTab as unknown as ReturnType<typeof vi.fn>
-    capture
-      .mockImplementationOnce(async () => `data:image/jpeg;base64,${largeBase64}`)
-      .mockImplementationOnce(async () => 'data:image/jpeg;base64,QQ==')
+    sendCommand
+      .mockResolvedValueOnce({ data: largeBase64 })
+      .mockResolvedValueOnce({ data: 'QQ==' })
 
+    const { captureTabScreenshot } = await import('./navigate-screenshot.js')
     const shot = await captureTabScreenshot(3)
 
-    expect(chrome.tabs.captureVisibleTab).toHaveBeenCalledTimes(2)
-    expect(chrome.tabs.captureVisibleTab).toHaveBeenLastCalledWith(1, {
+    expect(sendCommand).toHaveBeenCalledTimes(2)
+    expect(sendCommand).toHaveBeenLastCalledWith(3, 'Page.captureScreenshot', {
       format: 'jpeg',
       quality: 65,
+      fromSurface: true,
     })
     expect(shot.byteLength).toBeLessThanOrEqual(1_024 * 1_024)
   })

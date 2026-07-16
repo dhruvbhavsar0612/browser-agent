@@ -640,6 +640,21 @@ export function ChatView({
         </div>
       ) : null}
 
+      {streaming ? (
+        <div className="chat-activity" role="status">
+          {(() => {
+            const last = messages[messages.length - 1]
+            const pending = last?.segments?.find(
+              (segment) => segment.type === 'tool' && segment.status === 'pending',
+            )
+            if (pending && pending.type === 'tool') {
+              return `Running ${pending.toolName}…`
+            }
+            return 'Agent working…'
+          })()}
+        </div>
+      ) : null}
+
       {permissionQueue[0] ? (
         <PermissionAskBanner
           request={permissionQueue[0]}

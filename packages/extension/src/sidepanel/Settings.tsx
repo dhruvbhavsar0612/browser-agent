@@ -5,10 +5,12 @@ import {
   fromConfig,
   rulesForExecutionMode,
   type AppConfigType,
+  type ModelDiscoverySource,
   type ProviderInfo,
   type VaultListEntry,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
+import { RemoteMcpSettings } from './RemoteMcpSettings.js'
 import './Settings.css'
 
 const KEY_PROVIDERS = [
@@ -24,13 +26,24 @@ const KEY_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter', oauth: false as const },
   { id: 'openai-compatible', label: 'OpenAI-compatible', oauth: false as const },
 ] as const
+const CATALOG_PROVIDER_IDS = new Set(['anthropic', 'openai', 'google', 'openrouter'])
 
-type KeyProviderId = (typeof KEY_PROVIDERS)[number]['id']
+type KeyProviderId = string
 type OAuthProviderId = 'openai' | 'anthropic'
+type DiscoveryStatus = {
+  fetchedAt: number
+  source: ModelDiscoverySource
+  offline: boolean
+  error?: string
+}
 
 type TestState = 'idle' | 'testing' | 'ok' | 'error'
 
-function hasKey(entries: VaultListEntry[], providerId: string, type: 'api' | 'oauth' = 'api'): boolean {
+function hasKey(
+  entries: VaultListEntry[],
+  providerId: string,
+  type: 'api' | 'oauth' = 'api',
+): boolean {
   return entries.some((entry) => entry.providerId === providerId && entry.type === type)
 }
 
@@ -38,7 +51,12 @@ function hasAnyCredential(entries: VaultListEntry[], providerId: string): boolea
   return entries.some((entry) => entry.providerId === providerId)
 }
 
-function modelLabel(model: { name: string; toolCall: boolean; vision: boolean; context: number }): string {
+function modelLabel(model: {
+  name: string
+  toolCall: boolean
+  vision: boolean
+  context: number
+}): string {
   const tags: string[] = []
   if (model.toolCall) tags.push('tools')
   if (model.vision) tags.push('vision')
@@ -49,16 +67,19 @@ function modelLabel(model: { name: string; toolCall: boolean; vision: boolean; c
 export function SettingsView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [compatibleError, setCompatibleError] = useState<string | null>(null)
   const [vaultEntries, setVaultEntries] = useState<VaultListEntry[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [discovery, setDiscovery] = useState<Record<string, DiscoveryStatus>>({})
   const [config, setConfig] = useState<AppConfigType | null>(null)
   const [keyInputs, setKeyInputs] = useState<Partial<Record<KeyProviderId, string>>>({})
   const [baseURL, setBaseURL] = useState('')
+  const [customURLs, setCustomURLs] = useState<Record<string, string>>({})
+  const [customDraft, setCustomDraft] = useState({ id: '', name: '', api: '' })
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
   const [selectedModel, setSelectedModel] = useState('')
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [savingModel, setSavingModel] = useState(false)
-  const [refreshingModels, setRefreshingModels] = useState(false)
+  const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null)
   const [testState, setTestState] = useState<TestState>('idle')
   const [testMessage, setTestMessage] = useState('')
   const [oauthBusy, setOauthBusy] = useState<OAuthProviderId | null>(null)
@@ -73,24 +94,42 @@ export function SettingsView() {
     }
     const catalog = ((modelsRes.payload as { providers?: ProviderInfo[] })?.providers ??
       []) as ProviderInfo[]
-    const remoteError = (modelsRes.payload as { compatibleError?: string | null })?.compatibleError
+    const statuses = (modelsRes.payload as { discovery?: Record<string, DiscoveryStatus> })
+      ?.discovery
     setProviders(catalog)
-    setCompatibleError(remoteError ? String(remoteError) : null)
+    setDiscovery(statuses ?? {})
   }, [])
 
   const refreshModels = useCallback(
-    async (opts?: { forceRefresh?: boolean }) => {
-      setRefreshingModels(true)
+    async (providerId: string, opts?: { forceRefresh?: boolean }) => {
+      setRefreshingProvider(providerId)
       try {
-        const modelsRes = await sendRequest('models.list', {
+        const modelsRes = await sendRequest('models.discover', {
+          providerId,
           forceRefresh: opts?.forceRefresh ?? true,
         })
-        applyModelsResponse(modelsRes)
+        if (modelsRes.type === 'error') {
+          throw new Error(String((modelsRes.payload as { message?: string })?.message))
+        }
+        const result = modelsRes.payload as DiscoveryStatus & { provider: ProviderInfo }
+        setProviders((prev) => [
+          result.provider,
+          ...prev.filter((provider) => provider.id !== result.provider.id),
+        ])
+        setDiscovery((prev) => ({
+          ...prev,
+          [providerId]: {
+            fetchedAt: result.fetchedAt,
+            source: result.source,
+            offline: result.offline,
+            error: result.error,
+          },
+        }))
       } finally {
-        setRefreshingModels(false)
+        setRefreshingProvider(null)
       }
     },
-    [applyModelsResponse],
+    [],
   )
 
   const load = useCallback(async () => {
@@ -102,10 +141,13 @@ export function SettingsView() {
         sendRequest('config.get'),
       ])
 
-      if (vaultRes.type === 'error') throw new Error(String((vaultRes.payload as { message?: string })?.message))
-      if (configRes.type === 'error') throw new Error(String((configRes.payload as { message?: string })?.message))
+      if (vaultRes.type === 'error')
+        throw new Error(String((vaultRes.payload as { message?: string })?.message))
+      if (configRes.type === 'error')
+        throw new Error(String((configRes.payload as { message?: string })?.message))
 
-      const entries = ((vaultRes.payload as { entries?: VaultListEntry[] })?.entries ?? []) as VaultListEntry[]
+      const entries = ((vaultRes.payload as { entries?: VaultListEntry[] })?.entries ??
+        []) as VaultListEntry[]
       const cfg = configRes.payload as AppConfigType
 
       applyModelsResponse(modelsRes)
@@ -114,8 +156,19 @@ export function SettingsView() {
       setSelectedModel(cfg.model ?? '')
       setBaseURL(
         cfg.provider['openai-compatible']?.api ??
-          (cfg.provider['openai-compatible']?.options as { baseURL?: string } | undefined)?.baseURL ??
+          (cfg.provider['openai-compatible']?.options as { baseURL?: string } | undefined)
+            ?.baseURL ??
           '',
+      )
+      setCustomURLs(
+        Object.fromEntries(
+          Object.entries(cfg.provider)
+            .filter(([id]) => !KEY_PROVIDERS.some((provider) => provider.id === id))
+            .map(([id, provider]) => [
+              id,
+              provider.api ?? (provider.options as { baseURL?: string } | undefined)?.baseURL ?? '',
+            ]),
+        ),
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -148,6 +201,9 @@ export function SettingsView() {
             setOauthManual((prev) => ({ ...prev, [providerId]: false }))
             setOauthPaste((prev) => ({ ...prev, [providerId]: '' }))
             setOauthMessage((prev) => ({ ...prev, [providerId]: 'Connected.' }))
+            if (config?.provider[providerId]?.enabled) {
+              void refreshModels(providerId).catch(() => undefined)
+            }
           }
         }
       } catch {
@@ -161,19 +217,29 @@ export function SettingsView() {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [oauthManual])
+  }, [config, oauthManual, refreshModels])
 
   const modelOptions = useMemo(() => {
+    if (!config) return []
     return providers
-      .filter((provider) => provider.models.length > 0)
+      .filter((provider) => {
+        const providerConfig = config.provider[provider.id]
+        if (!providerConfig?.enabled) return false
+        return CATALOG_PROVIDER_IDS.has(provider.id)
+          ? hasAnyCredential(vaultEntries, provider.id)
+          : Boolean(
+              providerConfig.api ??
+              (providerConfig.options as { baseURL?: string } | undefined)?.baseURL,
+            )
+      })
       .map((provider) => ({
         provider,
-        models: [...provider.models].sort((a, b) => a.name.localeCompare(b.name)),
+        models: [...provider.models]
+          .filter((model) => config.provider[provider.id]?.models[model.id]?.enabled)
+          .sort((a, b) => a.name.localeCompare(b.name)),
       }))
-  }, [providers])
-
-  const compatibleModelCount =
-    providers.find((provider) => provider.id === 'openai-compatible')?.models.length ?? 0
+      .filter(({ models }) => models.length > 0)
+  }, [config, providers, vaultEntries])
 
   async function saveKey(providerId: KeyProviderId) {
     const secret = keyInputs[providerId]?.trim()
@@ -186,11 +252,12 @@ export function SettingsView() {
       if (response.type === 'error') {
         throw new Error(String((response.payload as { message?: string })?.message))
       }
-      const entries = ((response.payload as { entries?: VaultListEntry[] })?.entries ?? []) as VaultListEntry[]
+      const entries = ((response.payload as { entries?: VaultListEntry[] })?.entries ??
+        []) as VaultListEntry[]
       setVaultEntries(entries)
       setKeyInputs((prev) => ({ ...prev, [providerId]: '' }))
-      if (providerId === 'openai-compatible' && baseURL.trim()) {
-        await refreshModels()
+      if (config?.provider[providerId]?.enabled) {
+        await refreshModels(providerId)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -204,10 +271,8 @@ export function SettingsView() {
     const trimmed = baseURL.trim()
     const response = await sendRequest('config.set', {
       provider: {
-        ...config.provider,
         'openai-compatible': {
-          ...config.provider['openai-compatible'],
-          api: trimmed || undefined,
+          api: trimmed || null,
         },
       },
     })
@@ -215,11 +280,165 @@ export function SettingsView() {
       throw new Error(String((response.payload as { message?: string })?.message))
     }
     setConfig(response.payload as AppConfigType)
-    if (trimmed) {
-      await refreshModels()
+    if (trimmed && (response.payload as AppConfigType).provider['openai-compatible']?.enabled) {
+      await refreshModels('openai-compatible')
     } else {
-      setCompatibleError(null)
       setProviders((prev) => prev.filter((provider) => provider.id !== 'openai-compatible'))
+      setDiscovery((prev) => {
+        const next = { ...prev }
+        delete next['openai-compatible']
+        return next
+      })
+    }
+  }
+
+  async function toggleProvider(providerId: string, enabled: boolean) {
+    if (!config) return
+    setError(null)
+    const clearsDefault = !enabled && config.model?.startsWith(`${providerId}/`)
+    try {
+      const response = await sendRequest('config.set', {
+        model: clearsDefault ? null : undefined,
+        provider: { [providerId]: { enabled } },
+      })
+      if (response.type === 'error') {
+        throw new Error(String((response.payload as { message?: string })?.message))
+      }
+      const next = response.payload as AppConfigType
+      setConfig(next)
+      if (clearsDefault) {
+        setSelectedModel('')
+      }
+      if (!enabled) {
+        setProviders((prev) => prev.filter((provider) => provider.id !== providerId))
+        setDiscovery((prev) => {
+          const nextDiscovery = { ...prev }
+          delete nextDiscovery[providerId]
+          return nextDiscovery
+        })
+      }
+      if (enabled) {
+        const connected = CATALOG_PROVIDER_IDS.has(providerId)
+          ? hasAnyCredential(vaultEntries, providerId)
+          : Boolean(
+              next.provider[providerId]?.api ??
+              (next.provider[providerId]?.options as { baseURL?: string } | undefined)?.baseURL,
+            )
+        if (connected) await refreshModels(providerId, { forceRefresh: false })
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function setModelEnabled(provider: ProviderInfo, modelId: string, enabled: boolean) {
+    if (!config) return
+    const model = provider.models.find((item) => item.id === modelId)
+    if (!model) return
+    const ref = `${provider.id}/${model.id}`
+    const clearsDefault = !enabled && config.model === ref
+    setError(null)
+    try {
+      const response = await sendRequest('config.set', {
+        model: clearsDefault ? null : undefined,
+        provider: {
+          [provider.id]: {
+            models: {
+              [model.id]: {
+                enabled,
+                name: model.name,
+                tool_call: model.toolCall,
+              },
+            },
+          },
+        },
+      })
+      if (response.type === 'error') {
+        throw new Error(String((response.payload as { message?: string })?.message))
+      }
+      setConfig(response.payload as AppConfigType)
+      if (clearsDefault) setSelectedModel('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function setAllModelsEnabled(provider: ProviderInfo, enabled: boolean) {
+    if (!config) return
+    const clearsDefault = !enabled && config.model?.startsWith(`${provider.id}/`)
+    const models = Object.fromEntries(
+      provider.models.map((model) => [
+        model.id,
+        { enabled, name: model.name, tool_call: model.toolCall },
+      ]),
+    )
+    setError(null)
+    try {
+      const response = await sendRequest('config.set', {
+        model: clearsDefault ? null : undefined,
+        provider: { [provider.id]: { models } },
+      })
+      if (response.type === 'error') {
+        throw new Error(String((response.payload as { message?: string })?.message))
+      }
+      setConfig(response.payload as AppConfigType)
+      if (clearsDefault) setSelectedModel('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function addCustomProvider() {
+    const id = customDraft.id.trim().toLowerCase()
+    const api = customDraft.api.trim()
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+      setError('Provider ID must use lowercase letters, numbers, dots, dashes, or underscores.')
+      return
+    }
+    if (KEY_PROVIDERS.some((provider) => provider.id === id)) {
+      setError('That provider ID is reserved by a built-in provider.')
+      return
+    }
+    if (!api) {
+      setError('A base URL is required for a custom or local provider.')
+      return
+    }
+    const response = await sendRequest('config.set', {
+      provider: {
+        [id]: {
+          enabled: false,
+          name: customDraft.name.trim() || id,
+          api,
+        },
+      },
+    })
+    if (response.type === 'error') {
+      setError(String((response.payload as { message?: string })?.message))
+      return
+    }
+    setConfig(response.payload as AppConfigType)
+    setCustomURLs((prev) => ({ ...prev, [id]: api }))
+    setCustomDraft({ id: '', name: '', api: '' })
+  }
+
+  async function saveCustomURL(providerId: string) {
+    const api = (customURLs[providerId] ?? '').trim()
+    const response = await sendRequest('config.set', {
+      provider: { [providerId]: { api: api || null } },
+    })
+    if (response.type === 'error') {
+      throw new Error(String((response.payload as { message?: string })?.message))
+    }
+    setConfig(response.payload as AppConfigType)
+    if (!api && config?.model?.startsWith(`${providerId}/`)) {
+      const clearResponse = await sendRequest('config.set', { model: null })
+      if (clearResponse.type !== 'error') {
+        setConfig(clearResponse.payload as AppConfigType)
+        setSelectedModel('')
+      }
+    }
+    if (api && (response.payload as AppConfigType).provider[providerId]?.enabled) {
+      await refreshModels(providerId)
     }
   }
 
@@ -233,6 +452,16 @@ export function SettingsView() {
       const entries = ((response.payload as { entries?: VaultListEntry[] })?.entries ??
         []) as VaultListEntry[]
       setVaultEntries(entries)
+      if (
+        config?.model?.startsWith(`${providerId}/`) &&
+        !entries.some((entry) => entry.providerId === providerId)
+      ) {
+        const configResponse = await sendRequest('config.set', { model: null })
+        if (configResponse.type !== 'error') {
+          setConfig(configResponse.payload as AppConfigType)
+          setSelectedModel('')
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -259,6 +488,9 @@ export function SettingsView() {
         setOauthManual((prev) => ({ ...prev, [providerId]: false }))
         setOauthPaste((prev) => ({ ...prev, [providerId]: '' }))
         setOauthMessage((prev) => ({ ...prev, [providerId]: 'Connected.' }))
+        if (config?.provider[providerId]?.enabled) {
+          await refreshModels(providerId)
+        }
         return
       }
       if (result.manual) {
@@ -294,6 +526,9 @@ export function SettingsView() {
       setOauthManual((prev) => ({ ...prev, [providerId]: false }))
       setOauthPaste((prev) => ({ ...prev, [providerId]: '' }))
       setOauthMessage((prev) => ({ ...prev, [providerId]: 'Connected.' }))
+      if (config?.provider[providerId]?.enabled) {
+        await refreshModels(providerId)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -311,6 +546,16 @@ export function SettingsView() {
       }
       const result = response.payload as { entries?: VaultListEntry[] }
       if (result.entries) setVaultEntries(result.entries)
+      if (
+        config?.model?.startsWith(`${providerId}/`) &&
+        !result.entries?.some((entry) => entry.providerId === providerId)
+      ) {
+        const configResponse = await sendRequest('config.set', { model: null })
+        if (configResponse.type !== 'error') {
+          setConfig(configResponse.payload as AppConfigType)
+          setSelectedModel('')
+        }
+      }
       setOauthMessage((prev) => ({ ...prev, [providerId]: 'Disconnected.' }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -328,6 +573,16 @@ export function SettingsView() {
         throw new Error(String((response.payload as { message?: string })?.message))
       }
       setVaultEntries([])
+      if (
+        config?.model &&
+        CATALOG_PROVIDER_IDS.has(config.model.slice(0, config.model.indexOf('/')))
+      ) {
+        const configResponse = await sendRequest('config.set', { model: null })
+        if (configResponse.type !== 'error') {
+          setConfig(configResponse.payload as AppConfigType)
+          setSelectedModel('')
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -338,7 +593,7 @@ export function SettingsView() {
     setSavingModel(true)
     setError(null)
     try {
-      const response = await sendRequest('config.set', { model: model || undefined })
+      const response = await sendRequest('config.set', { model: model || null })
       if (response.type === 'error') {
         throw new Error(String((response.payload as { message?: string })?.message))
       }
@@ -355,7 +610,10 @@ export function SettingsView() {
     setTestMessage('')
     setError(null)
     try {
-      const response = await sendRequest('model.test', selectedModel ? { model: selectedModel } : {})
+      const response = await sendRequest(
+        'model.test',
+        selectedModel ? { model: selectedModel } : {},
+      )
       if (response.type === 'error') {
         throw new Error(String((response.payload as { message?: string })?.message))
       }
@@ -385,7 +643,9 @@ export function SettingsView() {
     <div className="settings">
       <div>
         <h1>Settings</h1>
-        <p className="settings-lede">Bring your own API keys. Secrets stay encrypted in local storage only.</p>
+        <p className="settings-lede">
+          Bring your own API keys. Secrets stay encrypted in local storage only.
+        </p>
       </div>
 
       {error ? <p className="settings-error">{error}</p> : null}
@@ -394,19 +654,38 @@ export function SettingsView() {
         <h2>API keys &amp; accounts</h2>
         {KEY_PROVIDERS.map((provider) => {
           const configured = hasKey(vaultEntries, provider.id, 'api')
-          const oauthConnected =
-            provider.oauth && hasKey(vaultEntries, provider.id, 'oauth')
+          const oauthConnected = provider.oauth && hasKey(vaultEntries, provider.id, 'oauth')
           const anyCred = hasAnyCredential(vaultEntries, provider.id)
+          const enabled = config?.provider[provider.id]?.enabled === true
+          const connected = provider.id === 'openai-compatible' ? Boolean(baseURL.trim()) : anyCred
+          const discovered = providers.find((item) => item.id === provider.id)
+          const providerDiscovery = discovery[provider.id]
+          const query = (modelSearch[provider.id] ?? '').trim().toLowerCase()
+          const visibleModels =
+            discovered?.models.filter(
+              (model) =>
+                !query ||
+                model.name.toLowerCase().includes(query) ||
+                model.id.toLowerCase().includes(query),
+            ) ?? []
           return (
             <div key={provider.id} className="settings-provider">
               <div className="settings-provider-header">
                 <span className="settings-provider-name">{provider.label}</span>
                 <div className="settings-provider-badges">
+                  <label className="settings-enable">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      onChange={(event) => void toggleProvider(provider.id, event.target.checked)}
+                    />
+                    Enabled
+                  </label>
                   {oauthConnected ? (
                     <span className="settings-badge settings-badge-ok">OAuth</span>
                   ) : null}
-                  <span className={`settings-badge ${configured ? 'settings-badge-ok' : ''}`}>
-                    {configured ? 'Key set' : anyCred && oauthConnected ? 'OAuth only' : 'Not set'}
+                  <span className={`settings-badge ${connected ? 'settings-badge-ok' : ''}`}>
+                    {connected ? 'Connected' : 'Disconnected'}
                   </span>
                 </div>
               </div>
@@ -441,21 +720,12 @@ export function SettingsView() {
                       Models are loaded from <code>{'{baseURL}'}/models</code> after you save.
                     </p>
                   </div>
-                  {compatibleError ? <p className="settings-error">{compatibleError}</p> : null}
-                  {!compatibleError && baseURL.trim() && compatibleModelCount > 0 ? (
-                    <p className="settings-hint">
-                      Loaded {compatibleModelCount} model{compatibleModelCount === 1 ? '' : 's'} from
-                      endpoint.
-                    </p>
-                  ) : null}
                 </>
               ) : null}
 
               {provider.oauth ? (
                 <div className="settings-oauth">
-                  <div className="settings-oauth-title">
-                    Sign in with {provider.oauthLabel}
-                  </div>
+                  <div className="settings-oauth-title">Sign in with {provider.oauthLabel}</div>
                   <p className="settings-hint">
                     Optional OAuth alongside a BYOK API key. OAuth is preferred when both are set.
                   </p>
@@ -467,7 +737,9 @@ export function SettingsView() {
                         disabled={oauthBusy === provider.id}
                         onClick={() => void disconnectOAuth(provider.id)}
                       >
-                        {oauthBusy === provider.id ? 'Working…' : `Disconnect ${provider.oauthLabel}`}
+                        {oauthBusy === provider.id
+                          ? 'Working…'
+                          : `Disconnect ${provider.oauthLabel}`}
                       </button>
                     ) : (
                       <button
@@ -517,9 +789,7 @@ export function SettingsView() {
                         <button
                           type="button"
                           className="settings-btn settings-btn-primary"
-                          disabled={
-                            !oauthPaste[provider.id]?.trim() || oauthBusy === provider.id
-                          }
+                          disabled={!oauthPaste[provider.id]?.trim() || oauthBusy === provider.id}
                           onClick={() => void completeOAuth(provider.id)}
                         >
                           Complete sign-in
@@ -573,15 +843,333 @@ export function SettingsView() {
                   </button>
                 ) : null}
               </div>
+
+              <div className="settings-models">
+                <div className="settings-row">
+                  <button
+                    type="button"
+                    className="settings-btn"
+                    disabled={!enabled || !connected || refreshingProvider === provider.id}
+                    onClick={() =>
+                      void refreshModels(provider.id).catch((err) =>
+                        setError(err instanceof Error ? err.message : String(err)),
+                      )
+                    }
+                  >
+                    {refreshingProvider === provider.id
+                      ? 'Discovering…'
+                      : discovered
+                        ? 'Refresh models'
+                        : 'Discover models'}
+                  </button>
+                  {discovered ? (
+                    <>
+                      <button
+                        type="button"
+                        className="settings-btn"
+                        onClick={() => void setAllModelsEnabled(discovered, true)}
+                      >
+                        Enable all
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-btn"
+                        onClick={() => void setAllModelsEnabled(discovered, false)}
+                      >
+                        Disable all
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+                {!enabled ? (
+                  <p className="settings-hint">Enable this provider to discover or use models.</p>
+                ) : !connected ? (
+                  <p className="settings-hint">
+                    {provider.id === 'openai-compatible'
+                      ? 'Save a base URL to connect this provider.'
+                      : 'Add an API key or OAuth account to connect this provider.'}
+                  </p>
+                ) : !discovered ? (
+                  <p className="settings-hint">No models discovered yet.</p>
+                ) : (
+                  <>
+                    <input
+                      className="settings-input"
+                      type="search"
+                      placeholder={`Search ${discovered.models.length} models…`}
+                      value={modelSearch[provider.id] ?? ''}
+                      onChange={(event) =>
+                        setModelSearch((prev) => ({
+                          ...prev,
+                          [provider.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="settings-model-list">
+                      {visibleModels.map((model) => {
+                        const modelEnabled =
+                          config?.provider[provider.id]?.models[model.id]?.enabled === true
+                        return (
+                          <label className="settings-model-row" key={model.id}>
+                            <input
+                              type="checkbox"
+                              checked={modelEnabled}
+                              onChange={(event) =>
+                                void setModelEnabled(discovered, model.id, event.target.checked)
+                              }
+                            />
+                            <span title={model.id}>{modelLabel(model)}</span>
+                          </label>
+                        )
+                      })}
+                      {visibleModels.length === 0 ? (
+                        <p className="settings-hint">No models match this search.</p>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+                {providerDiscovery ? (
+                  <p
+                    className={`settings-hint${providerDiscovery.offline ? ' settings-offline' : ''}`}
+                  >
+                    {providerDiscovery.offline
+                      ? 'Offline — using cached models. '
+                      : `Discovered ${discovered?.models.length ?? 0} models. `}
+                    {providerDiscovery.error ?? ''}
+                  </p>
+                ) : null}
+              </div>
             </div>
           )
         })}
 
         <div className="settings-row">
-          <button type="button" className="settings-btn settings-btn-danger" onClick={() => void clearAllKeys()}>
+          <button
+            type="button"
+            className="settings-btn settings-btn-danger"
+            onClick={() => void clearAllKeys()}
+          >
             Clear all keys
           </button>
         </div>
+      </section>
+
+      <section className="settings-section">
+        <h2>Custom &amp; local providers</h2>
+        <p className="settings-hint">
+          OpenAI-compatible endpoints discover models from <code>{'{baseURL}'}/models</code>. API
+          keys are optional for local servers.
+        </p>
+        <div className="settings-provider">
+          <div className="settings-field">
+            <label htmlFor="custom-provider-id">Provider ID</label>
+            <input
+              id="custom-provider-id"
+              className="settings-input"
+              placeholder="ollama"
+              value={customDraft.id}
+              onChange={(event) => setCustomDraft((prev) => ({ ...prev, id: event.target.value }))}
+            />
+          </div>
+          <div className="settings-field">
+            <label htmlFor="custom-provider-name">Display name</label>
+            <input
+              id="custom-provider-name"
+              className="settings-input"
+              placeholder="Local Ollama"
+              value={customDraft.name}
+              onChange={(event) =>
+                setCustomDraft((prev) => ({ ...prev, name: event.target.value }))
+              }
+            />
+          </div>
+          <div className="settings-field">
+            <label htmlFor="custom-provider-url">Base URL</label>
+            <input
+              id="custom-provider-url"
+              className="settings-input"
+              type="url"
+              placeholder="http://127.0.0.1:11434/v1"
+              value={customDraft.api}
+              onChange={(event) => setCustomDraft((prev) => ({ ...prev, api: event.target.value }))}
+            />
+          </div>
+          <button type="button" className="settings-btn" onClick={() => void addCustomProvider()}>
+            Add provider
+          </button>
+        </div>
+
+        {Object.entries(config?.provider ?? {})
+          .filter(([id]) => !KEY_PROVIDERS.some((provider) => provider.id === id))
+          .map(([providerId, providerConfig]) => {
+            const discovered = providers.find((provider) => provider.id === providerId)
+            const query = (modelSearch[providerId] ?? '').trim().toLowerCase()
+            const visibleModels =
+              discovered?.models.filter(
+                (model) =>
+                  !query ||
+                  model.id.toLowerCase().includes(query) ||
+                  model.name.toLowerCase().includes(query),
+              ) ?? []
+            const connected = Boolean(customURLs[providerId]?.trim())
+            const status = discovery[providerId]
+            const configured = hasKey(vaultEntries, providerId)
+            return (
+              <div className="settings-provider" key={providerId}>
+                <div className="settings-provider-header">
+                  <span className="settings-provider-name">
+                    {providerConfig.name ?? providerId}
+                  </span>
+                  <div className="settings-provider-badges">
+                    <label className="settings-enable">
+                      <input
+                        type="checkbox"
+                        checked={providerConfig.enabled}
+                        onChange={(event) => void toggleProvider(providerId, event.target.checked)}
+                      />
+                      Enabled
+                    </label>
+                    <span className={`settings-badge ${connected ? 'settings-badge-ok' : ''}`}>
+                      {connected ? 'Configured' : 'Disconnected'}
+                    </span>
+                  </div>
+                </div>
+                <div className="settings-field">
+                  <label htmlFor={`custom-url-${providerId}`}>Base URL</label>
+                  <input
+                    id={`custom-url-${providerId}`}
+                    className="settings-input"
+                    type="url"
+                    value={customURLs[providerId] ?? ''}
+                    onChange={(event) =>
+                      setCustomURLs((prev) => ({
+                        ...prev,
+                        [providerId]: event.target.value,
+                      }))
+                    }
+                    onBlur={() =>
+                      void saveCustomURL(providerId).catch((err) =>
+                        setError(err instanceof Error ? err.message : String(err)),
+                      )
+                    }
+                  />
+                </div>
+                <div className="settings-field">
+                  <label htmlFor={`custom-key-${providerId}`}>API key (optional)</label>
+                  <input
+                    id={`custom-key-${providerId}`}
+                    className="settings-input"
+                    type="password"
+                    value={keyInputs[providerId] ?? ''}
+                    placeholder={configured ? 'Enter new key to replace' : 'Optional'}
+                    onChange={(event) =>
+                      setKeyInputs((prev) => ({
+                        ...prev,
+                        [providerId]: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="settings-row">
+                  <button
+                    type="button"
+                    className="settings-btn"
+                    disabled={!keyInputs[providerId]?.trim() || savingKey === providerId}
+                    onClick={() => void saveKey(providerId)}
+                  >
+                    {savingKey === providerId ? 'Saving…' : 'Save key'}
+                  </button>
+                  {configured ? (
+                    <button
+                      type="button"
+                      className="settings-btn settings-btn-danger"
+                      onClick={() => void deleteKey(providerId)}
+                    >
+                      Remove key
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="settings-btn"
+                    disabled={
+                      !providerConfig.enabled || !connected || refreshingProvider === providerId
+                    }
+                    onClick={() =>
+                      void refreshModels(providerId).catch((err) =>
+                        setError(err instanceof Error ? err.message : String(err)),
+                      )
+                    }
+                  >
+                    {refreshingProvider === providerId
+                      ? 'Discovering…'
+                      : discovered
+                        ? 'Refresh models'
+                        : 'Discover models'}
+                  </button>
+                </div>
+                {discovered && providerConfig.enabled && connected ? (
+                  <div className="settings-models">
+                    <div className="settings-row">
+                      <button
+                        type="button"
+                        className="settings-btn"
+                        onClick={() => void setAllModelsEnabled(discovered, true)}
+                      >
+                        Enable all
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-btn"
+                        onClick={() => void setAllModelsEnabled(discovered, false)}
+                      >
+                        Disable all
+                      </button>
+                    </div>
+                    <input
+                      className="settings-input"
+                      type="search"
+                      placeholder={`Search ${discovered.models.length} models…`}
+                      value={modelSearch[providerId] ?? ''}
+                      onChange={(event) =>
+                        setModelSearch((prev) => ({
+                          ...prev,
+                          [providerId]: event.target.value,
+                        }))
+                      }
+                    />
+                    <div className="settings-model-list">
+                      {visibleModels.map((model) => (
+                        <label className="settings-model-row" key={model.id}>
+                          <input
+                            type="checkbox"
+                            checked={providerConfig.models[model.id]?.enabled === true}
+                            onChange={(event) =>
+                              void setModelEnabled(discovered, model.id, event.target.checked)
+                            }
+                          />
+                          <span title={model.id}>{modelLabel(model)}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {status ? (
+                      <p className={`settings-hint${status.offline ? ' settings-offline' : ''}`}>
+                        {status.offline
+                          ? 'Offline — using cached models. '
+                          : `Discovered ${discovered.models.length} models. `}
+                        {status.error ?? ''}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="settings-hint">
+                    {providerConfig.enabled && connected
+                      ? 'No models discovered yet.'
+                      : 'Enable and configure this provider to discover models.'}
+                  </p>
+                )}
+              </div>
+            )
+          })}
       </section>
 
       <section className="settings-section">
@@ -620,19 +1208,13 @@ export function SettingsView() {
           >
             {testState === 'testing' ? 'Testing…' : 'Test model'}
           </button>
-          <button
-            type="button"
-            className="settings-btn"
-            disabled={refreshingModels}
-            onClick={() =>
-              void refreshModels().catch((err) =>
-                setError(err instanceof Error ? err.message : String(err)),
-              )
-            }
-          >
-            {refreshingModels ? 'Refreshing…' : 'Refresh models'}
-          </button>
         </div>
+
+        {modelOptions.length === 0 ? (
+          <p className="settings-hint">
+            Connect and enable a provider, discover its models, then enable at least one model.
+          </p>
+        ) : null}
 
         {testState !== 'idle' ? (
           <div
@@ -648,6 +1230,8 @@ export function SettingsView() {
           </div>
         ) : null}
       </section>
+
+      <RemoteMcpSettings />
 
       <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
     </div>

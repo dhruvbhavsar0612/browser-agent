@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "plugin",
+  "id": "dev.browser-agent/research-kit",
+  "version": "1.0.0",
+  "name": "Example research kit",
+  "description": "Declarative bundle of the example search connector and research skill.",
+  "connector": {
+    "id": "dev.browser-agent/example-search",
+    "version": "1.0.0",
+    "config": {
+      "enabled": true,
+      "variables": {
+        "X-API-Key": {
+          "secret": "example-search-api-key"
+        }
+      }
+    }
+  },
+  "skills": [
+    {
+      "id": "dev.browser-agent/research",
+      "version": "1.0.0",
+      "config": {
+        "enabled": true
+      }
+    }
+  ],
+  "compatibility": {
+    "browserAgent": ">=0.4.1",
+    "mcpProtocol": ">=2025-03-26",
+    "remoteMcpConfigSchema": "1"
+  },
+  "license": {
+    "spdx": "MIT"
+  },
+  "provenance": {
+    "provider": "manual",
+    "sourceUrl": "https://example.com/research-kit/plugin.json",
+    "sourceId": "dev.browser-agent/research-kit@1.0.0"
+  },
+  "checksum": {
+    "algorithm": "sha256",
+    "digest": "1111111111111111111111111111111111111111111111111111111111111111"
+  }
+}

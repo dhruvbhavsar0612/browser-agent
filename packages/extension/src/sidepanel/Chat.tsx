@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createRequest,
+  type AppConfigType,
   type ChatMessage,
-  type PartRecord,
   type PermissionReply,
+  type ProviderInfo,
   type SessionRecord,
   type StreamEvent,
 } from '@browser-agent/core'
@@ -11,23 +12,16 @@ import { sendRequest } from './client.js'
 import { MarkdownContent } from './markdown.js'
 import { PermissionAskBanner, type PermissionAskRequest } from './PermissionAsk.js'
 import { ThinkingDisclosure } from './ThinkingDisclosure.js'
-import { ToolInspector, groupToolEvents, type ToolGroup, type ToolStreamEvent } from './ToolInspector.js'
+import { ToolInspector } from './ToolInspector.js'
 import { ManagedStreamConnection } from './stream-connection.js'
+import {
+  assistantSegmentsText,
+  reduceAssistantSegments,
+  transcriptToMessages,
+  type TranscriptRow,
+  type UiMessage,
+} from './assistant-message.js'
 import './Chat.css'
-
-type ToolEvent = ToolStreamEvent
-
-type UiMessage = ChatMessage & {
-  id: string
-  reasoning?: string
-  tools?: ToolGroup[]
-}
-
-type TranscriptRow = {
-  id: string
-  role: string
-  parts: PartRecord[]
-}
 
 function createId(): string {
   return crypto.randomUUID()
@@ -37,59 +31,6 @@ function titleFromPrompt(text: string): string {
   const cleaned = text.replace(/\s+/g, ' ').trim()
   if (!cleaned) return 'New chat'
   return cleaned.length > 48 ? `${cleaned.slice(0, 45)}…` : cleaned
-}
-
-function transcriptToMessages(rows: TranscriptRow[]): UiMessage[] {
-  const messages: UiMessage[] = []
-
-  for (const row of rows) {
-    if (row.role !== 'user' && row.role !== 'assistant') continue
-
-    let content = ''
-    let reasoning = ''
-    const toolEvents: ToolStreamEvent[] = []
-
-    for (const part of row.parts) {
-      if (part.type === 'text' && typeof part.content === 'string') {
-        content += part.content
-      } else if (part.type === 'reasoning' && typeof part.content === 'string') {
-        reasoning += part.content
-      } else if (part.type === 'tool-call') {
-        const call = part.content as {
-          toolCallId?: string
-          toolName?: string
-          args?: unknown
-        }
-        if (call.toolCallId && call.toolName) {
-          toolEvents.push({
-            kind: 'tool-call',
-            toolCallId: call.toolCallId,
-            toolName: call.toolName,
-            args: call.args,
-          })
-        }
-      } else if (part.type === 'tool-result') {
-        const result = part.content as { toolCallId?: string; result?: unknown }
-        if (result.toolCallId) {
-          toolEvents.push({
-            kind: 'tool-result',
-            toolCallId: result.toolCallId,
-            result: result.result,
-          })
-        }
-      }
-    }
-
-    messages.push({
-      id: row.id,
-      role: row.role,
-      content,
-      reasoning: reasoning || undefined,
-      tools: toolEvents.length ? groupToolEvents(toolEvents) : undefined,
-    })
-  }
-
-  return messages
 }
 
 export type ChatViewProps = {
@@ -113,6 +54,12 @@ export function ChatView({
   const [error, setError] = useState<string | null>(null)
   const [permissionQueue, setPermissionQueue] = useState<PermissionAskRequest[]>([])
   const [permissionBusy, setPermissionBusy] = useState(false)
+  const [config, setConfig] = useState<AppConfigType | null>(null)
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [session, setSession] = useState<SessionRecord | null>(null)
+  const [selectedModel, setSelectedModel] = useState('')
+  const [loadingModels, setLoadingModels] = useState(true)
+  const [compactionStatus, setCompactionStatus] = useState<string | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<
     'connected' | 'disconnected' | 'reconnecting'
   >('connected')
@@ -122,6 +69,28 @@ export function ChatView({
   const activeRequestIdRef = useRef<string | null>(null)
   const streamingRef = useRef(false)
   const sessionIdRef = useRef(sessionId)
+
+  const enabledModels = useMemo(() => {
+    if (!config) return []
+    return providers
+      .filter((provider) => config.provider[provider.id]?.enabled)
+      .map((provider) => ({
+        provider,
+        models: provider.models
+          .filter((model) => config.provider[provider.id]?.models[model.id]?.enabled)
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .filter(({ models }) => models.length > 0)
+  }, [config, providers])
+
+  const selectedModelEnabled = useMemo(
+    () =>
+      !selectedModel ||
+      enabledModels.some(({ provider, models }) =>
+        models.some((model) => `${provider.id}/${model.id}` === selectedModel),
+      ),
+    [enabledModels, selectedModel],
+  )
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -139,39 +108,68 @@ export function ChatView({
     sessionIdRef.current = sessionId
   }, [sessionId])
 
-  const appendToolEvent = useCallback((event: ToolEvent) => {
+  useEffect(() => {
+    let cancelled = false
+    setLoadingModels(true)
+    void Promise.all([
+      sendRequest('config.get'),
+      sendRequest('models.list'),
+      sendRequest('session.list'),
+    ])
+      .then(([configResponse, modelsResponse, sessionsResponse]) => {
+        if (cancelled) return
+        if (configResponse.type === 'error' || modelsResponse.type === 'error') {
+          throw new Error('Could not load enabled models')
+        }
+        const nextConfig = configResponse.payload as AppConfigType
+        const nextProviders =
+          (modelsResponse.payload as { providers?: ProviderInfo[] })?.providers ?? []
+        const sessions = (sessionsResponse.payload ?? []) as SessionRecord[]
+        const activeSession = sessionId
+          ? (sessions.find((item) => item.id === sessionId) ?? null)
+          : null
+        setConfig(nextConfig)
+        setProviders(nextProviders)
+        setSession(activeSession)
+        // New chats inherit only the global default. Existing chats retain
+        // their pin; legacy unpinned sessions fall back at runtime.
+        const agentModel = nextConfig.agent[agent]?.model
+        const fallback = agentModel
+          ? `${agentModel.providerID}/${agentModel.modelID}`
+          : (nextConfig.model ?? '')
+        setSelectedModel(activeSession?.model ?? (!sessionId ? (nextConfig.model ?? '') : fallback))
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agent, sessionId])
+
+  const appendAssistantEvent = useCallback((event: StreamEvent) => {
     setMessages((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
       if (!last || last.role !== 'assistant') {
+        const segments = reduceAssistantSegments([], event)
         next.push({
           id: createId(),
           role: 'assistant',
-          content: '',
-          tools: groupToolEvents([event]),
+          content: assistantSegmentsText(segments),
+          segments,
         })
         return next
       }
-      const rawEvents: ToolStreamEvent[] = []
-      for (const group of last.tools ?? []) {
-        if (group.args !== undefined) {
-          rawEvents.push({
-            kind: 'tool-call',
-            toolCallId: group.toolCallId,
-            toolName: group.toolName,
-            args: group.args,
-          })
-        }
-        if (group.result !== undefined) {
-          rawEvents.push({
-            kind: 'tool-result',
-            toolCallId: group.toolCallId,
-            result: group.result,
-          })
-        }
+      const segments = reduceAssistantSegments(last.segments ?? [], event)
+      next[next.length - 1] = {
+        ...last,
+        content: assistantSegmentsText(segments),
+        segments,
       }
-      rawEvents.push(event)
-      next[next.length - 1] = { ...last, tools: groupToolEvents(rawEvents) }
       return next
     })
   }, [])
@@ -181,44 +179,17 @@ export function ChatView({
       const requestId = activeRequestIdRef.current
       if (!requestId || envelopeId !== requestId) return
 
-      if (event.kind === 'text-delta') {
-        setMessages((prev) => {
-          const next = [...prev]
-          const last = next[next.length - 1]
-          if (!last || last.role !== 'assistant') {
-            next.push({ id: createId(), role: 'assistant', content: event.text })
-            return next
-          }
-          next[next.length - 1] = { ...last, content: last.content + event.text }
-          return next
-        })
-        return
-      }
-
-      if (event.kind === 'reasoning-delta') {
-        setMessages((prev) => {
-          const next = [...prev]
-          const last = next[next.length - 1]
-          if (!last || last.role !== 'assistant') {
-            next.push({
-              id: createId(),
-              role: 'assistant',
-              content: '',
-              reasoning: event.text,
-            })
-            return next
-          }
-          next[next.length - 1] = {
-            ...last,
-            reasoning: (last.reasoning ?? '') + event.text,
-          }
-          return next
-        })
-        return
-      }
-
-      if (event.kind === 'tool-call' || event.kind === 'tool-result') {
-        appendToolEvent(event)
+      if (
+        event.kind === 'segment-start' ||
+        event.kind === 'segment-end' ||
+        event.kind === 'step-start' ||
+        event.kind === 'step-end' ||
+        event.kind === 'text-delta' ||
+        event.kind === 'reasoning-delta' ||
+        event.kind === 'tool-call' ||
+        event.kind === 'tool-result'
+      ) {
+        appendAssistantEvent(event)
         return
       }
 
@@ -238,7 +209,13 @@ export function ChatView({
         return
       }
 
+      if (event.kind === 'compaction') {
+        setCompactionStatus(event.message)
+        return
+      }
+
       if (event.kind === 'error') {
+        appendAssistantEvent(event)
         setError(event.message)
         setStreaming(false)
         activeRequestIdRef.current = null
@@ -247,13 +224,14 @@ export function ChatView({
       }
 
       if (event.kind === 'done') {
+        appendAssistantEvent(event)
         setStreaming(false)
         activeRequestIdRef.current = null
         setPermissionQueue([])
         onSessionsRefresh()
       }
     },
-    [appendToolEvent, onSessionsRefresh],
+    [appendAssistantEvent, onSessionsRefresh],
   )
 
   useEffect(() => {
@@ -288,6 +266,7 @@ export function ChatView({
 
     if (!sessionId) {
       setMessages([])
+      setCompactionStatus(null)
       setLoadingSession(false)
       setError(null)
       return
@@ -295,6 +274,7 @@ export function ChatView({
 
     setLoadingSession(true)
     setError(null)
+    setCompactionStatus(null)
 
     void sendRequest('session.get', { id: sessionId })
       .then((response) => {
@@ -334,35 +314,50 @@ export function ChatView({
         const listed = await sendRequest('session.list')
         const sessions = (listed.payload ?? []) as SessionRecord[]
         const found = sessions.find((item) => item.id === existingId)
-        if (found) return found
+        if (found) {
+          setSession(found)
+          return found
+        }
       }
 
       const created = await sendRequest('session.create', {
         agent,
         title: titleFromPrompt(firstMessage),
+        model: selectedModel || undefined,
       })
       if (created.type === 'error' || !created.payload) {
         throw new Error('Could not create chat session')
       }
       const session = created.payload as SessionRecord
       sessionIdRef.current = session.id
+      setSession(session)
+      setSelectedModel(session.model ?? '')
       onSessionChange(session)
       onSessionsRefresh()
       return session
     },
-    [agent, onSessionChange, onSessionsRefresh],
+    [agent, onSessionChange, onSessionsRefresh, selectedModel],
   )
 
   const send = useCallback(() => {
     const text = input.trim()
-    if (!text || streaming || loadingSession) return
+    if (
+      !text ||
+      streaming ||
+      loadingSession ||
+      loadingModels ||
+      !selectedModel ||
+      !selectedModelEnabled
+    )
+      return
 
     const userMessage: UiMessage = { id: createId(), role: 'user', content: text }
-    const assistantMessage: UiMessage = { id: createId(), role: 'assistant', content: '' }
-    const history: ChatMessage[] = [
-      ...messages.map(({ role, content }) => ({ role, content })),
-      { role: 'user', content: text },
-    ]
+    const assistantMessage: UiMessage = {
+      id: createId(),
+      role: 'assistant',
+      content: '',
+      segments: [],
+    }
 
     void (async () => {
       try {
@@ -383,7 +378,8 @@ export function ChatView({
         }
 
         const request = createRequest('agent.prompt', {
-          messages: history,
+          // Durable history is reconstructed by the background from IndexedDB.
+          messages: [{ role: 'user', content: text }] satisfies ChatMessage[],
           agent,
           sessionId: session.id,
           tabId,
@@ -393,6 +389,7 @@ export function ChatView({
         setMessages((prev) => [...prev, userMessage, assistantMessage])
         setInput('')
         setError(null)
+        setCompactionStatus(null)
         setStreaming(true)
         stream.postMessage(request)
 
@@ -413,36 +410,39 @@ export function ChatView({
     ensureSession,
     input,
     loadingSession,
-    messages,
+    loadingModels,
     onSessionsRefresh,
+    selectedModel,
+    selectedModelEnabled,
     streaming,
   ])
 
-  const replyPermission = useCallback(async (response: PermissionReply) => {
-    const current = permissionQueue[0]
-    if (!current || permissionBusy) return
-    setPermissionBusy(true)
-    try {
-      const result = await sendRequest('permission.reply', {
-        id: current.requestId,
-        response,
-      })
-      if (result.type === 'error') {
-        setError(
-          typeof result.payload === 'object' &&
-            result.payload &&
-            'message' in result.payload
-            ? String((result.payload as { message: string }).message)
-            : 'Permission reply failed',
-        )
+  const replyPermission = useCallback(
+    async (response: PermissionReply) => {
+      const current = permissionQueue[0]
+      if (!current || permissionBusy) return
+      setPermissionBusy(true)
+      try {
+        const result = await sendRequest('permission.reply', {
+          id: current.requestId,
+          response,
+        })
+        if (result.type === 'error') {
+          setError(
+            typeof result.payload === 'object' && result.payload && 'message' in result.payload
+              ? String((result.payload as { message: string }).message)
+              : 'Permission reply failed',
+          )
+        }
+        setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setPermissionBusy(false)
       }
-      setPermissionQueue((prev) => prev.filter((item) => item.requestId !== current.requestId))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setPermissionBusy(false)
-    }
-  }, [permissionBusy, permissionQueue])
+    },
+    [permissionBusy, permissionQueue],
+  )
 
   const stop = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -453,6 +453,30 @@ export function ChatView({
     setPermissionQueue([])
   }, [])
 
+  const switchModel = useCallback(
+    async (model: string) => {
+      if (!model || streaming) return
+      setError(null)
+      if (!sessionIdRef.current) {
+        setSelectedModel(model)
+        return
+      }
+      const response = await sendRequest('session.update', {
+        id: sessionIdRef.current,
+        model,
+      })
+      if (response.type === 'error' || !response.payload) {
+        throw new Error('Could not update this chat model')
+      }
+      const updated = response.payload as SessionRecord
+      setSession(updated)
+      setSelectedModel(updated.model ?? model)
+      onSessionChange(updated)
+      onSessionsRefresh()
+    },
+    [onSessionChange, onSessionsRefresh, streaming],
+  )
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -462,6 +486,56 @@ export function ChatView({
 
   return (
     <div className="chat">
+      <div className="chat-model-header">
+        <label className="chat-model-picker">
+          <span>Model</span>
+          <select
+            value={selectedModel}
+            disabled={loadingModels || streaming || enabledModels.length === 0}
+            onChange={(event) =>
+              void switchModel(event.target.value).catch((err) =>
+                setError(err instanceof Error ? err.message : String(err)),
+              )
+            }
+          >
+            {!selectedModel ? (
+              <option value="">
+                {loadingModels
+                  ? 'Loading models…'
+                  : enabledModels.length === 0
+                    ? 'No enabled models'
+                    : 'Choose a model'}
+              </option>
+            ) : null}
+            {selectedModel && !selectedModelEnabled ? (
+              <option value={selectedModel} disabled>
+                {selectedModel} (disabled or disconnected)
+              </option>
+            ) : null}
+            {enabledModels.map(({ provider, models }) => (
+              <optgroup key={provider.id} label={provider.name}>
+                {models.map((model) => (
+                  <option key={`${provider.id}/${model.id}`} value={`${provider.id}/${model.id}`}>
+                    {model.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <span className="chat-model-scope">
+          {session?.model
+            ? 'Pinned to this chat'
+            : sessionId
+              ? 'Using fallback'
+              : 'New chat default'}
+        </span>
+      </div>
+      {selectedModel && !selectedModelEnabled ? (
+        <div className="chat-model-warning">
+          This chat’s model is disabled, disconnected, or unavailable. Choose an enabled model.
+        </div>
+      ) : null}
       <div className="chat-messages" aria-live="polite">
         {loadingSession ? (
           <div className="chat-empty">
@@ -474,50 +548,79 @@ export function ChatView({
             </div>
             <h2>What can I help with?</h2>
             <p>
-              Configure an API key in Settings, pick a model, then ask the agent to browse, read, or
-              act on the current tab.
+              Connect and enable a provider in Settings, enable a model, then ask the agent to
+              browse, read, or act on the current tab.
             </p>
           </div>
         ) : (
           messages.map((message, index) => {
             const isStreamingAssistant =
               streaming && index === messages.length - 1 && message.role === 'assistant'
-            const hasReasoning = Boolean(message.reasoning)
-            const showThinkingLive = isStreamingAssistant && hasReasoning && !message.content
+            const segments = message.segments ?? []
+            const hasVisibleSegment = segments.some(
+              (segment) =>
+                segment.type === 'tool' ||
+                ((segment.type === 'text' || segment.type === 'reasoning') &&
+                  Boolean(segment.content)),
+            )
 
             return (
-              <div
-                key={message.id}
-                className={`chat-message chat-message-${message.role}`}
-              >
-                {message.role === 'assistant' && message.tools?.length ? (
-                  <ToolInspector tools={message.tools} />
-                ) : null}
+              <div key={message.id} className={`chat-message chat-message-${message.role}`}>
+                {message.role === 'assistant'
+                  ? segments.map((segment) => {
+                      if (segment.type === 'text') {
+                        return segment.content ? (
+                          <div
+                            key={segment.id}
+                            className={`chat-bubble chat-bubble-assistant${
+                              isStreamingAssistant && segment.status === 'streaming'
+                                ? ' chat-bubble-streaming'
+                                : ''
+                            }`}
+                          >
+                            <MarkdownContent source={segment.content} />
+                          </div>
+                        ) : null
+                      }
+                      if (segment.type === 'reasoning') {
+                        return segment.content ? (
+                          <ThinkingDisclosure
+                            key={segment.id}
+                            content={segment.content}
+                            isLive={isStreamingAssistant && segment.status === 'streaming'}
+                          />
+                        ) : null
+                      }
+                      return (
+                        <ToolInspector
+                          key={segment.id}
+                          tools={[
+                            {
+                              toolCallId: segment.toolCallId,
+                              toolName: segment.toolName,
+                              args: segment.args,
+                              result: segment.result,
+                              status: segment.status,
+                            },
+                          ]}
+                        />
+                      )
+                    })
+                  : null}
 
-                {message.role === 'assistant' && hasReasoning ? (
-                  <ThinkingDisclosure
-                    content={message.reasoning ?? ''}
-                    isLive={showThinkingLive}
-                  />
-                ) : null}
-
-                {(message.content || message.role === 'user') && (
-                  <div
-                    className={`chat-bubble chat-bubble-${message.role}${
-                      isStreamingAssistant && message.content ? ' chat-bubble-streaming' : ''
-                    }`}
-                  >
-                    {message.role === 'assistant' ? (
-                      message.content ? (
-                        <MarkdownContent source={message.content} />
-                      ) : isStreamingAssistant && !hasReasoning && !message.tools?.length ? (
-                        '…'
-                      ) : null
-                    ) : (
-                      message.content
-                    )}
+                {message.role === 'assistant' && segments.length === 0 && message.content ? (
+                  <div className="chat-bubble chat-bubble-assistant">
+                    <MarkdownContent source={message.content} />
                   </div>
-                )}
+                ) : null}
+
+                {message.role === 'user' ? (
+                  <div className="chat-bubble chat-bubble-user">{message.content}</div>
+                ) : null}
+
+                {isStreamingAssistant && !hasVisibleSegment ? (
+                  <div className="chat-bubble chat-bubble-assistant">…</div>
+                ) : null}
               </div>
             )
           })
@@ -528,6 +631,12 @@ export function ChatView({
       {connectionStatus !== 'connected' ? (
         <div className="chat-connection" role="status">
           {connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Connection lost — retrying'}
+        </div>
+      ) : null}
+
+      {compactionStatus ? (
+        <div className="chat-connection" role="status">
+          {compactionStatus}
         </div>
       ) : null}
 
@@ -563,7 +672,13 @@ export function ChatView({
               <button
                 type="button"
                 className="chat-btn chat-btn-send"
-                disabled={!input.trim() || loadingSession}
+                disabled={
+                  !input.trim() ||
+                  loadingSession ||
+                  loadingModels ||
+                  !selectedModel ||
+                  !selectedModelEnabled
+                }
                 onClick={send}
               >
                 Send

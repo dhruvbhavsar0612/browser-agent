@@ -3,10 +3,7 @@ import { z } from 'zod'
 export const PermissionAction = z.enum(['allow', 'ask', 'deny'])
 export type PermissionAction = z.infer<typeof PermissionAction>
 
-export const PermissionRule = z.union([
-  PermissionAction,
-  z.record(z.string(), PermissionAction),
-])
+export const PermissionRule = z.union([PermissionAction, z.record(z.string(), PermissionAction)])
 export type PermissionRule = z.infer<typeof PermissionRule>
 
 export const PermissionConfig = z.union([
@@ -41,9 +38,12 @@ export type PermissionConfig = z.infer<typeof PermissionConfig>
 export const ProviderModelConfig = z.object({
   name: z.string().optional(),
   tool_call: z.boolean().optional(),
+  enabled: z.boolean().default(false),
 })
+export type ProviderModelConfig = z.infer<typeof ProviderModelConfig>
 
 export const ProviderConfig = z.object({
+  enabled: z.boolean().default(false),
   npm: z.string().optional(),
   name: z.string().optional(),
   api: z.string().url().optional(),
@@ -54,7 +54,7 @@ export const ProviderConfig = z.object({
     })
     .passthrough()
     .optional(),
-  models: z.record(z.string(), ProviderModelConfig).optional(),
+  models: z.record(z.string(), ProviderModelConfig).default({}),
 })
 export type ProviderConfig = z.infer<typeof ProviderConfig>
 
@@ -75,25 +75,144 @@ export const AgentConfig = z.object({
 })
 export type AgentConfig = z.infer<typeof AgentConfig>
 
-export const McpServerConfig = z.object({
-  type: z.enum(['remote']).default('remote'),
-  url: z.string().url(),
-  headers: z.record(z.string(), z.string()).optional(),
-  enabled: z.boolean().optional(),
+const SECRET_HEADER_NAME = /^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token)$/i
+
+export function isSecureRemoteUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'https:') return true
+    return (
+      url.protocol === 'http:' &&
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+    )
+  } catch {
+    return false
+  }
+}
+
+export const McpToolConfig = z.object({
+  enabled: z.boolean().default(true),
 })
+export type McpToolConfig = z.infer<typeof McpToolConfig>
+
+export const McpAuthConfig = z
+  .object({
+    mode: z.enum(['none', 'bearer', 'api-key', 'oauth']).default('none'),
+    /** Header name only. Its value always lives in the encrypted MCP vault namespace. */
+    headerName: z.string().min(1).max(128).optional(),
+  })
+  .default({ mode: 'none' })
+export type McpAuthConfig = z.infer<typeof McpAuthConfig>
+
+export const McpServerConfig = z
+  .object({
+    type: z.enum(['remote']).default('remote'),
+    name: z.string().min(1).max(100).optional(),
+    url: z
+      .string()
+      .url()
+      .refine(
+        isSecureRemoteUrl,
+        'Remote MCP URL must use HTTPS (HTTP is allowed for localhost only)',
+      ),
+    transport: z.enum(['auto', 'streamable-http', 'sse']).default('auto'),
+    headers: z
+      .record(z.string().min(1), z.string())
+      .default({})
+      .superRefine((headers, ctx) => {
+        for (const name of Object.keys(headers)) {
+          if (SECRET_HEADER_NAME.test(name)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [name],
+              message: 'Secret header values must be stored in the encrypted MCP credential vault',
+            })
+          }
+        }
+      }),
+    auth: McpAuthConfig,
+    enabled: z.boolean().default(true),
+    tools: z.record(z.string(), McpToolConfig).default({}),
+    provenance: z
+      .object({
+        provider: z.enum(['official-mcp', 'smithery', 'glama', 'manual']),
+        sourceUrl: z.string().url().optional(),
+        sourceId: z.string().optional(),
+        version: z.string().optional(),
+      })
+      .optional(),
+  })
+  .strict()
 export type McpServerConfig = z.infer<typeof McpServerConfig>
 
-export const AppConfig = z.object({
-  model: z.string().optional(),
-  small_model: z.string().optional(),
-  provider: z.record(z.string(), ProviderConfig).default({}),
-  agent: z.record(z.string(), AgentConfig).default({}),
-  permission: PermissionConfig.default({ '*': 'ask' }),
-  mcp: z.record(z.string(), McpServerConfig).default({}),
-  executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
+export const CompactionConfig = z.object({
+  fallbackContextTokens: z.number().int().min(8_192).default(32_768),
+  threshold: z.number().min(0.7).max(0.75).default(0.72),
+  reserveTokens: z.number().int().min(1_024).default(4_096),
+  recentTurns: z.number().int().min(1).default(6),
+  maxToolResultChars: z.number().int().min(1_000).default(12_000),
 })
+export type CompactionConfig = z.infer<typeof CompactionConfig>
+
+export const AppConfig = z
+  .object({
+    model: z.string().optional(),
+    small_model: z.string().optional(),
+    provider: z.record(z.string(), ProviderConfig).default({}),
+    agent: z.record(z.string(), AgentConfig).default({}),
+    permission: PermissionConfig.default({ '*': 'ask' }),
+    mcp: z.record(z.string(), McpServerConfig).default({}),
+    compaction: CompactionConfig.default({
+      fallbackContextTokens: 32_768,
+      threshold: 0.72,
+      reserveTokens: 4_096,
+      recentTurns: 6,
+      maxToolResultChars: 12_000,
+    }),
+    executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
+  })
+  .superRefine((config, ctx) => {
+    if (!config.model) return
+    const slash = config.model.indexOf('/')
+    if (slash <= 0 || slash === config.model.length - 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Default model must use providerID/modelID format',
+      })
+      return
+    }
+    const providerID = config.model.slice(0, slash)
+    const modelID = config.model.slice(slash + 1)
+    const provider = config.provider[providerID]
+    if (provider?.enabled !== true || provider.models[modelID]?.enabled !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Default model must belong to an enabled provider and be enabled',
+      })
+    }
+  })
 export type AppConfig = z.infer<typeof AppConfig>
 export type ExecutionMode = AppConfig['executionMode']
+
+export type ProviderConfigPatch = Partial<Omit<ProviderConfig, 'api' | 'models' | 'options'>> & {
+  api?: string | null
+  options?: ProviderConfig['options']
+  models?: Record<string, Partial<ProviderModelConfig>>
+}
+
+export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools'>> & {
+  tools?: Record<string, Partial<McpToolConfig>>
+}
+
+export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider' | 'mcp'> & {
+  /** null explicitly clears the default across JSON/chrome messaging boundaries. */
+  model?: string | null
+  provider?: Record<string, ProviderConfigPatch>
+  /** A null server removes it. Other entries merge to preserve per-tool choices. */
+  mcp?: Record<string, McpServerConfigPatch | null>
+}
 
 export const DEFAULT_CONFIG: AppConfig = {
   provider: {},
@@ -199,7 +318,8 @@ Restrictions:
       description: 'Compress conversation context',
       mode: 'subagent',
       hidden: true,
-      prompt: 'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
+      prompt:
+        'Summarize the conversation so far into a short, information-dense recap. Preserve decisions, URLs, and open questions.',
       steps: 5,
       permission: { '*': 'deny' },
     },
@@ -207,13 +327,21 @@ Restrictions:
       description: 'Generate a short chat title',
       mode: 'subagent',
       hidden: true,
-      prompt: 'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
+      prompt:
+        'Generate a short title (3–6 words) for this conversation. Reply with the title only, no quotes.',
       steps: 3,
       permission: { '*': 'deny' },
     },
   },
   permission: { '*': 'ask' },
   mcp: {},
+  compaction: {
+    fallbackContextTokens: 32_768,
+    threshold: 0.72,
+    reserveTokens: 4_096,
+    recentTurns: 6,
+    maxToolResultChars: 12_000,
+  },
   executionMode: 'approval',
 }
 
@@ -221,13 +349,78 @@ export function parseConfig(input: unknown): AppConfig {
   return AppConfig.parse(input)
 }
 
-export function mergeConfig(base: AppConfig, override: Partial<AppConfig>): AppConfig {
+export function isProviderEnabled(config: AppConfig, providerID: string): boolean {
+  return config.provider[providerID]?.enabled === true
+}
+
+export function isModelEnabled(config: AppConfig, providerID: string, modelID: string): boolean {
+  const provider = config.provider[providerID]
+  return provider?.enabled === true && provider.models[modelID]?.enabled === true
+}
+
+function mergeProviders(
+  base: AppConfig['provider'],
+  patch: AppConfigPatch['provider'],
+): AppConfig['provider'] {
+  const merged: Record<string, ProviderConfig> = { ...base }
+  for (const [providerID, providerPatch] of Object.entries(patch ?? {})) {
+    const current = base[providerID]
+    const normalizedPatch = {
+      ...providerPatch,
+      api: providerPatch.api === null ? undefined : providerPatch.api,
+    }
+    const models = { ...(current?.models ?? {}) }
+    for (const [modelID, modelPatch] of Object.entries(providerPatch.models ?? {})) {
+      models[modelID] = {
+        enabled: false,
+        ...models[modelID],
+        ...modelPatch,
+      }
+    }
+    merged[providerID] = {
+      enabled: false,
+      ...current,
+      ...normalizedPatch,
+      options:
+        current?.options || providerPatch.options
+          ? { ...current?.options, ...providerPatch.options }
+          : undefined,
+      models,
+    }
+  }
+  return merged
+}
+
+function mergeMcp(base: AppConfig['mcp'], patch: AppConfigPatch['mcp']): AppConfig['mcp'] {
+  const merged: Record<string, McpServerConfig> = { ...base }
+  for (const [serverId, serverPatch] of Object.entries(patch ?? {})) {
+    if (serverPatch === null) {
+      delete merged[serverId]
+      continue
+    }
+    const current = base[serverId]
+    merged[serverId] = McpServerConfig.parse({
+      ...current,
+      ...serverPatch,
+      headers: serverPatch.headers ?? current?.headers ?? {},
+      auth: { ...current?.auth, ...serverPatch.auth },
+      tools: { ...current?.tools, ...serverPatch.tools },
+    })
+  }
+  return merged
+}
+
+export function mergeConfig(base: AppConfig, override: AppConfigPatch): AppConfig {
+  const model =
+    override.model === null ? undefined : override.model !== undefined ? override.model : base.model
   return parseConfig({
     ...base,
     ...override,
-    provider: { ...base.provider, ...override.provider },
+    model,
+    provider: mergeProviders(base.provider, override.provider),
     agent: { ...base.agent, ...override.agent },
-    mcp: { ...base.mcp, ...override.mcp },
+    mcp: mergeMcp(base.mcp, override.mcp),
+    compaction: { ...base.compaction, ...override.compaction },
     permission: override.permission ?? base.permission,
   })
 }

@@ -13,7 +13,8 @@
     "format": "prettier --write .",
     "pack:extension": "node scripts/pack-extension.mjs",
     "sync:version": "node scripts/sync-version.mjs",
-    "update:models-snapshot": "node scripts/update-models-snapshot.mjs"
+    "update:models-snapshot": "node scripts/update-models-snapshot.mjs",
+    "smoke:mcp": "node packages/core/scripts/mcp-live-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

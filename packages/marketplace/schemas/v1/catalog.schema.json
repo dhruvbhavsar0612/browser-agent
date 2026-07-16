@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.browser-agent.dev/marketplace/v1/catalog.schema.json",
+  "title": "Browser Agent marketplace catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "items"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "items": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "https://schemas.browser-agent.dev/marketplace/v1/connector.schema.json"
+          },
+          {
+            "$ref": "https://schemas.browser-agent.dev/marketplace/v1/skill.schema.json"
+          },
+          {
+            "$ref": "https://schemas.browser-agent.dev/marketplace/v1/plugin.schema.json"
+          }
+        ]
+      }
+    }
+  }
+}

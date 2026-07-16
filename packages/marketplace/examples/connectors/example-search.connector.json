@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "connector",
+  "id": "dev.browser-agent/example-search",
+  "version": "1.0.0",
+  "name": "Example Search",
+  "description": "Safe fixture for a hosted search MCP server.",
+  "transport": {
+    "streamableHttp": {
+      "url": "https://mcp.example.com/search",
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "description": "API key supplied from the app vault",
+          "required": true,
+          "secret": true
+        }
+      ]
+    },
+    "legacySse": {
+      "url": "https://mcp.example.com/search/sse"
+    }
+  },
+  "auth": {
+    "type": "api-key",
+    "credentialKeys": ["X-API-Key"],
+    "instructionsUrl": "https://example.com/search/auth"
+  },
+  "registry": {
+    "provider": "manual",
+    "sourceUrl": "https://example.com/search/manifest.json",
+    "sourceId": "dev.browser-agent/example-search@1.0.0"
+  },
+  "capabilities": {
+    "tools": ["search"],
+    "resources": false,
+    "prompts": false
+  },
+  "toolAnnotations": [
+    {
+      "name": "search",
+      "title": "Search the web",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  ],
+  "compatibility": {
+    "browserAgent": ">=0.4.1",
+    "mcpProtocol": ">=2025-03-26",
+    "remoteMcpConfigSchema": "1"
+  },
+  "license": {
+    "spdx": "MIT",
+    "url": "https://example.com/search/license"
+  },
+  "maintainer": {
+    "name": "Browser Agent examples",
+    "url": "https://example.com"
+  },
+  "verification": {
+    "status": "unverified",
+    "checksum": {
+      "algorithm": "sha256",
+      "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

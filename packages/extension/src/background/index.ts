@@ -5,23 +5,36 @@ import {
   createResponse,
   IndexedDbSessionStore,
   ModelsDevService,
+  McpMarketplaceService,
+  RemoteMcpRegistry,
+  isModelEnabled,
+  parseModelRef,
   type Envelope,
 } from '@browser-agent/core'
 import { createMessageBus, runDemoStream } from './bus.js'
 import { registerAgentHandlers } from './handlers/agent.js'
 import { registerOAuthHandlers } from './handlers/oauth.js'
+import { registerMcpHandlers } from './handlers/mcp.js'
 import { registerSettingsHandlers } from './handlers/settings.js'
 
 const storage = createChromeStorage()
 const config = new ConfigService(storage)
 const models = new ModelsDevService(storage)
 const vault = new CredentialVault(storage)
+const mcp = new RemoteMcpRegistry(config, vault, storage, {
+  oauthRedirectUrl: () => chrome.identity.getRedirectURL('mcp'),
+})
+const mcpMarketplace = new McpMarketplaceService()
 const sessions = new IndexedDbSessionStore()
 const bus = createMessageBus()
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
   void config.get()
+})
+
+chrome.runtime.onSuspend.addListener(() => {
+  void mcp.closeAll()
 })
 
 chrome.commands.onCommand.addListener((command) => {
@@ -44,10 +57,18 @@ bus
   )
   .on('session.create', async (message) => {
     const payload = (message.payload ?? {}) as { title?: string; agent?: string; model?: string }
+    const appConfig = await config.get()
+    const model = payload.model ?? appConfig.model
+    if (model) {
+      const ref = parseModelRef(model)
+      if (!isModelEnabled(appConfig, ref.providerID, ref.modelID)) {
+        throw new Error(`Model "${model}" is not enabled`)
+      }
+    }
     const session = await sessions.createSession({
       title: payload.title,
       agent: payload.agent ?? 'browse',
-      model: payload.model,
+      model,
     })
     return createResponse(message, 'session.create', session)
   })
@@ -79,12 +100,10 @@ bus
   })
 
 registerSettingsHandlers(bus, { vault, models, config })
-registerAgentHandlers(bus, { config, vault, sessions })
+registerMcpHandlers(bus, { config, vault, registry: mcp, marketplace: mcpMarketplace })
+registerAgentHandlers(bus, { config, vault, sessions, models, mcp })
 registerOAuthHandlers(bus, { vault })
 
 bus.listen()
-
-// Warm models.dev cache in background (non-blocking)
-void models.listProviders().catch(() => undefined)
 
 console.info('[browser-agent] service worker ready')

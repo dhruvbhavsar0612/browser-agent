@@ -7,6 +7,26 @@ export function stripSecrets<T extends Record<string, unknown>>(input: T): T {
       if (entry?.options && typeof entry.options === 'object') {
         const options = entry.options as Record<string, unknown>
         delete options.apiKey
+        if (options.headers && typeof options.headers === 'object') {
+          const headers = options.headers as Record<string, unknown>
+          for (const name of Object.keys(headers)) {
+            if (/^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(name)) {
+              delete headers[name]
+            }
+          }
+        }
+      }
+    }
+  }
+  const mcp = clone.mcp
+  if (mcp && typeof mcp === 'object') {
+    for (const entry of Object.values(mcp as Record<string, Record<string, unknown>>)) {
+      if (!entry?.headers || typeof entry.headers !== 'object') continue
+      const headers = entry.headers as Record<string, unknown>
+      for (const name of Object.keys(headers)) {
+        if (/^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token)$/i.test(name)) {
+          delete headers[name]
+        }
       }
     }
   }
@@ -86,3 +106,4 @@ export const MODELS_CACHE_KEY = 'browser-agent.models-dev'
 export const VAULT_LOCAL_KEY = 'browser-agent.vault'
 /** Exported AES key material for vault wrapping (local only — never sync) */
 export const VAULT_META_KEY = 'browser-agent.vault-meta'
+export const MCP_DISCOVERY_CACHE_KEY = 'browser-agent.mcp.discovery'

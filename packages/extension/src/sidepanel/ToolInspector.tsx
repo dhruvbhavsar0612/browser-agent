@@ -9,7 +9,7 @@ export type ToolGroup = {
   toolName: string
   args?: unknown
   result?: unknown
-  status: 'pending' | 'done'
+  status: 'pending' | 'done' | 'error'
 }
 
 function formatJson(value: unknown): string {
@@ -42,7 +42,7 @@ function ToolRow({ tool }: { tool: ToolGroup }) {
         </span>
         <span className="tool-name">{tool.toolName}</span>
         <span className={`tool-status tool-status-${tool.status}`}>
-          {tool.status === 'pending' ? 'Running' : 'Done'}
+          {tool.status === 'pending' ? 'Running' : tool.status === 'error' ? 'Error' : 'Done'}
         </span>
       </button>
       {expanded && hasDetails ? (

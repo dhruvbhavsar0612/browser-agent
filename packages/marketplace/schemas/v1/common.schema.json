@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.browser-agent.dev/marketplace/v1/common.schema.json",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9._-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]*$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "checksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "digest"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx"],
+      "properties": {
+        "spdx": { "type": "string", "minLength": 1 },
+        "url": { "$ref": "#/$defs/httpsUrl" }
+      }
+    },
+    "maintainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "email": { "type": "string", "format": "email" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "sourceUrl", "sourceId"],
+      "properties": {
+        "provider": { "enum": ["official-mcp", "smithery", "glama", "manual"] },
+        "sourceUrl": { "$ref": "#/$defs/httpsUrl" },
+        "sourceId": { "type": "string", "minLength": 1 },
+        "importedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["browserAgent", "mcpProtocol"],
+      "properties": {
+        "browserAgent": { "type": "string", "minLength": 1 },
+        "mcpProtocol": { "type": "string", "minLength": 1 },
+        "remoteMcpConfigSchema": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

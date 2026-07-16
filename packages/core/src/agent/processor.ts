@@ -19,13 +19,17 @@ const THINK_CLOSE_BY_OPEN: Record<string, string> = {
 }
 
 export type DurablePart =
-  | { type: 'text'; content: string }
-  | { type: 'reasoning'; content: string }
+  | { id: string; type: 'text'; content: string }
+  | { id: string; type: 'reasoning'; content: string }
   | {
+      id: string
       type: 'tool-call'
       content: { toolCallId: string; toolName: string; args: unknown }
     }
-  | { type: 'tool-result'; content: { toolCallId: string; result: unknown } }
+  | {
+      type: 'tool-result'
+      content: { toolCallId: string; segmentId: string; result: unknown }
+    }
 
 export type DoomLoopOptions = {
   threshold: number
@@ -38,15 +42,18 @@ export type DoomLoopOptions = {
 
 export type ProcessFullStreamOptions = {
   onEvent: (event: StreamEvent) => void
-  onPart?: (part: DurablePart) => void
+  onPart?: (part: DurablePart) => void | Promise<void>
   truncateToolResult?: (result: unknown) => unknown
   doomLoop?: DoomLoopOptions
   abortSignal?: AbortSignal
+  createSegmentId?: (type: 'text' | 'reasoning' | 'tool' | 'step') => string
+  emitErrors?: boolean
 }
 
 export type ProcessFullStreamResult = {
   finishReason?: string
   stopped: boolean
+  error?: unknown
 }
 
 type ThinkEmit = {
@@ -112,6 +119,12 @@ export class ThinkTagParser {
     if (!this.partial) return
     if (this.mode === 'text') emit.text(this.partial)
     else emit.reasoning(this.partial)
+    this.partial = ''
+  }
+
+  reset(): void {
+    this.mode = 'text'
+    this.closeTag = THINK_CLOSE
     this.partial = ''
   }
 }
@@ -198,52 +211,130 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
 ): Promise<ProcessFullStreamResult> {
   const truncate = options.truncateToolResult ?? truncateToolResultDefault
   const doomThreshold = options.doomLoop?.threshold ?? 3
+  const createSegmentId = options.createSegmentId ?? (() => crypto.randomUUID())
 
   let finishReason: string | undefined
   let stopped = false
-  let textBuffer = ''
-  let reasoningBuffer = ''
+  let streamError: unknown
   const thinkParser = new ThinkTagParser()
+  let activeContent:
+    | {
+        id: string
+        type: 'text' | 'reasoning'
+        content: string
+        sourceId?: string
+      }
+    | undefined
+  let activeStepId: string | undefined
+  let thinkSourceId: string | undefined
+  const toolSegments = new Map<string, string>()
 
   let lastToolKey: string | undefined
   let consecutiveToolCount = 0
 
-  const emitTextDelta = (text: string) => {
+  const closeContent = async () => {
+    const segment = activeContent
+    if (!segment) return
+    activeContent = undefined
+    options.onEvent({
+      kind: 'segment-end',
+      segmentId: segment.id,
+      segmentType: segment.type,
+    })
+    if (segment.content) {
+      await options.onPart?.({
+        id: segment.id,
+        type: segment.type,
+        content: segment.content,
+      })
+    }
+  }
+
+  const startContent = async (type: 'text' | 'reasoning', sourceId?: string, force = false) => {
+    if (
+      !force &&
+      activeContent?.type === type &&
+      (!sourceId || activeContent.sourceId === sourceId)
+    ) {
+      return activeContent
+    }
+    await closeContent()
+    const segment = {
+      id: createSegmentId(type),
+      type,
+      content: '',
+      sourceId,
+    }
+    activeContent = segment
+    options.onEvent({
+      kind: 'segment-start',
+      segmentId: segment.id,
+      segmentType: type,
+    })
+    return segment
+  }
+
+  const emitContent = async (type: 'text' | 'reasoning', text: string, sourceId?: string) => {
     if (!text) return
-    options.onEvent({ kind: 'text-delta', text })
-    textBuffer += text
+    const segment = await startContent(type, sourceId)
+    segment.content += text
+    options.onEvent({
+      kind: type === 'text' ? 'text-delta' : 'reasoning-delta',
+      segmentId: segment.id,
+      text,
+    })
   }
 
-  const emitReasoningDelta = (text: string) => {
-    if (!text) return
-    options.onEvent({ kind: 'reasoning-delta', text })
-    reasoningBuffer += text
-  }
-
-  const flushText = () => {
-    if (!textBuffer) return
-    options.onPart?.({ type: 'text', content: textBuffer })
-    textBuffer = ''
-  }
-
-  const flushReasoning = () => {
-    if (!reasoningBuffer) return
-    options.onPart?.({ type: 'reasoning', content: reasoningBuffer })
-    reasoningBuffer = ''
-  }
-
-  const processTextChunk = (chunk: string) => {
+  const processTextChunk = async (chunk: string, sourceId: string) => {
+    thinkSourceId = sourceId
+    const parsed: Array<{ type: 'text' | 'reasoning'; text: string }> = []
     thinkParser.process(chunk, {
-      text: emitTextDelta,
-      reasoning: emitReasoningDelta,
+      text: (text) => parsed.push({ type: 'text', text }),
+      reasoning: (text) => parsed.push({ type: 'reasoning', text }),
     })
+    for (const item of parsed) {
+      await emitContent(item.type, item.text, sourceId)
+    }
   }
 
-  const flushThinkParser = () => {
+  const flushThinkParser = async (reset = false) => {
+    const parsed: Array<{ type: 'text' | 'reasoning'; text: string }> = []
     thinkParser.flush({
-      text: emitTextDelta,
-      reasoning: emitReasoningDelta,
+      text: (text) => parsed.push({ type: 'text', text }),
+      reasoning: (text) => parsed.push({ type: 'reasoning', text }),
     })
+    for (const item of parsed) {
+      await emitContent(item.type, item.text, thinkSourceId)
+    }
+    if (reset) {
+      thinkParser.reset()
+      thinkSourceId = undefined
+    }
+  }
+
+  const startStep = async () => {
+    await flushThinkParser(true)
+    await closeContent()
+    if (activeStepId) {
+      options.onEvent({ kind: 'step-end', stepId: activeStepId })
+    }
+    activeStepId = createSegmentId('step')
+    options.onEvent({ kind: 'step-start', stepId: activeStepId })
+  }
+
+  const endStep = async (reason?: string) => {
+    await flushThinkParser(true)
+    await closeContent()
+    if (!activeStepId) {
+      activeStepId = createSegmentId('step')
+      options.onEvent({ kind: 'step-start', stepId: activeStepId })
+    }
+    options.onEvent({
+      kind: 'step-end',
+      stepId: activeStepId,
+      finishReason: reason,
+    })
+    activeStepId = undefined
   }
 
   const checkDoomLoop = async (toolName: string, args: unknown): Promise<boolean> => {
@@ -287,45 +378,53 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
 
       switch (part.type) {
         case 'text-start':
+          await flushThinkParser(true)
+          await closeContent()
+          await startContent('text', part.id, true)
           break
 
         case 'text-delta':
-          processTextChunk(part.text)
+          await processTextChunk(part.text, part.id)
           break
 
         case 'text-end':
-          flushThinkParser()
-          flushText()
+          await flushThinkParser(true)
+          await closeContent()
           break
 
         case 'reasoning-start':
+          await closeContent()
+          await startContent('reasoning', part.id, true)
           break
 
         case 'reasoning-delta':
-          emitReasoningDelta(part.text)
+          await emitContent('reasoning', part.text, part.id)
           break
 
         case 'reasoning-end':
-          flushReasoning()
+          await closeContent()
           break
 
         case 'tool-call': {
-          flushThinkParser()
-          flushText()
-          flushReasoning()
+          await flushThinkParser(true)
+          await closeContent()
 
           const args = 'input' in part ? part.input : undefined
           if (await checkDoomLoop(part.toolName, args)) {
             break
           }
 
+          const segmentId = createSegmentId('tool')
+          toolSegments.set(part.toolCallId, segmentId)
           options.onEvent({
             kind: 'tool-call',
+            segmentId,
             toolCallId: part.toolCallId,
             toolName: part.toolName,
             args,
           })
-          options.onPart?.({
+          await options.onPart?.({
+            id: segmentId,
             type: 'tool-call',
             content: {
               toolCallId: part.toolCallId,
@@ -338,14 +437,17 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
 
         case 'tool-result': {
           const result = truncate(part.output)
+          const segmentId = toolSegments.get(part.toolCallId) ?? createSegmentId('tool')
+          toolSegments.set(part.toolCallId, segmentId)
           options.onEvent({
             kind: 'tool-result',
+            segmentId,
             toolCallId: part.toolCallId,
             result,
           })
-          options.onPart?.({
+          await options.onPart?.({
             type: 'tool-result',
-            content: { toolCallId: part.toolCallId, result },
+            content: { toolCallId: part.toolCallId, segmentId, result },
           })
           break
         }
@@ -357,16 +459,44 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
               : typeof part.error === 'string'
                 ? part.error
                 : 'Tool execution failed'
+          const result = { error: message }
+          const segmentId = toolSegments.get(part.toolCallId) ?? createSegmentId('tool')
+          toolSegments.set(part.toolCallId, segmentId)
+          options.onEvent({
+            kind: 'tool-result',
+            segmentId,
+            toolCallId: part.toolCallId,
+            result,
+          })
+          await options.onPart?.({
+            type: 'tool-result',
+            content: { toolCallId: part.toolCallId, segmentId, result },
+          })
           options.onEvent({ kind: 'error', message })
           break
         }
 
+        case 'start-step':
+          await startStep()
+          break
+
         case 'finish-step':
           finishReason = part.finishReason
+          await endStep(part.finishReason)
           break
 
         case 'finish':
           finishReason = part.finishReason
+          await flushThinkParser(true)
+          await closeContent()
+          if (activeStepId) {
+            options.onEvent({
+              kind: 'step-end',
+              stepId: activeStepId,
+              finishReason: part.finishReason,
+            })
+            activeStepId = undefined
+          }
           break
 
         case 'error': {
@@ -376,7 +506,8 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
               : typeof part.error === 'string'
                 ? part.error
                 : String(part.error)
-          options.onEvent({ kind: 'error', message })
+          streamError = part.error
+          if (options.emitErrors !== false) options.onEvent({ kind: 'error', message })
           stopped = true
           break
         }
@@ -392,10 +523,13 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
       if (stopped) break
     }
   } finally {
-    flushThinkParser()
-    flushText()
-    flushReasoning()
+    await flushThinkParser(true)
+    await closeContent()
+    if (activeStepId) {
+      options.onEvent({ kind: 'step-end', stepId: activeStepId })
+      activeStepId = undefined
+    }
   }
 
-  return { finishReason, stopped }
+  return { finishReason, stopped, error: streamError }
 }

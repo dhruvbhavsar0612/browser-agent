@@ -55,10 +55,20 @@ describe('messaging envelope', () => {
 describe('stream events', () => {
   it('parses every StreamEvent kind', () => {
     const events: StreamEvent[] = [
-      { kind: 'text-delta', text: 'hi' },
-      { kind: 'reasoning-delta', text: 'thinking' },
-      { kind: 'tool-call', toolCallId: 't1', toolName: 'click', args: { x: 1 } },
-      { kind: 'tool-result', toolCallId: 't1', result: { ok: true } },
+      { kind: 'segment-start', segmentId: 's1', segmentType: 'text' },
+      { kind: 'text-delta', segmentId: 's1', text: 'hi' },
+      { kind: 'segment-end', segmentId: 's1', segmentType: 'text' },
+      { kind: 'step-start', stepId: 'step-1' },
+      { kind: 'step-end', stepId: 'step-1', finishReason: 'stop' },
+      { kind: 'reasoning-delta', segmentId: 'r1', text: 'thinking' },
+      {
+        kind: 'tool-call',
+        segmentId: 'tool-1',
+        toolCallId: 't1',
+        toolName: 'click',
+        args: { x: 1 },
+      },
+      { kind: 'tool-result', segmentId: 'tool-1', toolCallId: 't1', result: { ok: true } },
       {
         kind: 'permission-ask',
         requestId: 'r1',

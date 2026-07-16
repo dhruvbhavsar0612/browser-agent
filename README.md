@@ -78,12 +78,14 @@ OpenAI-compatible endpoints (e.g. OpenCode Zen) work: set **Base URL** + key in 
 | Workflow | Trigger | What it does |
 |----------|---------|----------------|
 | **CI** | PR + push to `main` | `typecheck` → `test` → `build` → upload extension zip artifact |
-| **Release** | Push tag `v*` (or manual dispatch) | Same checks → attach zip to a GitHub Release with install notes |
+| **Release** | Push tag `v*` / semver (or manual dispatch) | Same checks → attach zip to a GitHub Release with install notes |
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.4.5
+git push origin v0.4.5
 ```
+
+Do not create a Release from the GitHub UI alone — push a tag (or use **Actions → Release → Run workflow**) so the zip is built. See [RELEASE.md](docs/RELEASE.md).
 
 ## Concept
 

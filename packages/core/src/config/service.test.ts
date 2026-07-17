@@ -36,7 +36,7 @@ describe('ConfigService', () => {
     expect(cfg.executionMode).toBe('approval')
   })
 
-  it('persists patches without secrets in sync store', async () => {
+  it('persists patches to local storage without secrets', async () => {
     const storage = createMemoryStorage()
     const svc = new ConfigService(storage)
     const result = await svc.set({
@@ -45,7 +45,7 @@ describe('ConfigService', () => {
         openai: { name: 'OpenAI', options: { apiKey: 'sk-leak' } },
       },
     })
-    const raw = await storage.getSync('browser-agent.config')
+    const raw = await storage.getLocal('browser-agent.config.local')
     expect(JSON.stringify(raw)).not.toContain('sk-leak')
     expect(JSON.stringify(result)).not.toContain('sk-leak')
     const cfg = await svc.get()
@@ -53,9 +53,38 @@ describe('ConfigService', () => {
     expect(cfg.provider.openai?.name).toBe('OpenAI')
   })
 
-  it('migrates only a legacy selected model to enabled state', async () => {
+  it('migrates sync config into local storage once', async () => {
     const storage = createMemoryStorage()
     await storage.setSync('browser-agent.config', {
+      model: 'openai/gpt-4.1',
+      provider: {
+        openai: {
+          enabled: true,
+          models: { 'gpt-4.1': { enabled: true } },
+        },
+      },
+    })
+    const svc = new ConfigService(storage)
+    const cfg = await svc.get()
+    expect(cfg.model).toBe('openai/gpt-4.1')
+    expect(await storage.getLocal('browser-agent.config.local')).toBeTruthy()
+
+    await svc.set({
+      provider: {
+        'openai-compatible': {
+          enabled: true,
+          api: 'https://opencode.ai/zen/go/v1',
+          models: { 'minimax-m2.5': { enabled: true } },
+        },
+      },
+    })
+    const next = await svc.get()
+    expect(next.provider['openai-compatible']?.models['minimax-m2.5']?.enabled).toBe(true)
+  })
+
+  it('migrates only a legacy selected model to enabled state', async () => {
+    const storage = createMemoryStorage()
+    await storage.setLocal('browser-agent.config.local', {
       model: 'openai/gpt-4.1',
       provider: { openai: { name: 'OpenAI' } },
     })

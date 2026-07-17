@@ -102,6 +102,8 @@ export function createChromeStorage(): StorageAdapter {
 }
 
 export const CONFIG_SYNC_KEY = 'browser-agent.config'
+/** Preferred store — sync has an 8KB/item quota that agent prompts + model maps exceed. */
+export const CONFIG_LOCAL_KEY = 'browser-agent.config.local'
 export const MODELS_CACHE_KEY = 'browser-agent.models-dev'
 export const VAULT_LOCAL_KEY = 'browser-agent.vault'
 /** Exported AES key material for vault wrapping (local only — never sync) */

@@ -174,6 +174,31 @@ describe('settings handlers', () => {
     fetchSpy.mockRestore()
   })
 
+  it('lists config-enabled openai-compatible models even when discovery cache is cold', async () => {
+    await config.set({
+      provider: {
+        'openai-compatible': {
+          enabled: true,
+          api: 'https://opencode.ai/zen/go/v1',
+          models: {
+            'minimax-m2.5': { enabled: true, name: 'minimax-m2.5' },
+            'qwen3.5-plus': { enabled: true, name: 'qwen3.5-plus' },
+          },
+        },
+      },
+    })
+
+    const listed = await dispatchSettingsMessage(bus, createRequest('models.list'))
+    const providers = (
+      listed.payload as { providers: { id: string; models: { id: string }[] }[] }
+    ).providers
+    expect(providers.map((provider) => provider.id)).toEqual(['openai-compatible'])
+    expect(providers[0]?.models.map((model) => model.id).sort()).toEqual([
+      'minimax-m2.5',
+      'qwen3.5-plus',
+    ])
+  })
+
   it('runs model.test using vault key and generateText', async () => {
     await vault.set('openai', 'sk-live')
     await config.set({

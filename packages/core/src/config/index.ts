@@ -37,9 +37,17 @@ export {
   createMemoryStorage,
   createChromeStorage,
   CONFIG_SYNC_KEY,
+  CONFIG_LOCAL_KEY,
   MODELS_CACHE_KEY,
   VAULT_LOCAL_KEY,
   VAULT_META_KEY,
   MCP_DISCOVERY_CACHE_KEY,
 } from './storage.js'
 export type { StorageAdapter } from './storage.js'
+export {
+  isCatalogProvider,
+  isProviderConnected,
+  listEnabledModelGroups,
+  providerInfoFromEnabledConfig,
+} from './enabled-models.js'
+export type { EnabledModelGroup, ProviderConnection } from './enabled-models.js'

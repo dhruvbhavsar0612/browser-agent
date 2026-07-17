@@ -8,6 +8,7 @@ import {
   generateText,
   getModel,
   isModelEnabled,
+  providerInfoFromEnabledConfig,
   type Envelope,
   type ModelDiscoverySource,
   type ProviderDiscoveryResult,
@@ -130,13 +131,21 @@ export async function listConnectedProviders(deps: {
         )
     if (!connected) continue
     const cached = await deps.models.getCachedProvider(providerID)
-    if (!cached) continue
-    providers.push(cached.provider)
-    discovery[providerID] = {
-      fetchedAt: cached.fetchedAt,
-      source: cached.source,
-      offline: cached.offline,
-      error: cached.error,
+    if (cached) {
+      providers.push(cached.provider)
+      discovery[providerID] = {
+        fetchedAt: cached.fetchedAt,
+        source: cached.source,
+        offline: cached.offline,
+        error: cached.error,
+      }
+      continue
+    }
+
+    // Config-enabled models must still appear in pickers if discovery cache is cold.
+    const synthesized = providerInfoFromEnabledConfig(providerID, config)
+    if (synthesized) {
+      providers.push(synthesized)
     }
   }
 

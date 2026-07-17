@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createRequest,
+  listEnabledModelGroups,
   type AppConfigType,
   type ChatMessage,
   type PermissionReply,
@@ -72,15 +73,7 @@ export function ChatView({
 
   const enabledModels = useMemo(() => {
     if (!config) return []
-    return providers
-      .filter((provider) => config.provider[provider.id]?.enabled)
-      .map((provider) => ({
-        provider,
-        models: provider.models
-          .filter((model) => config.provider[provider.id]?.models[model.id]?.enabled)
-          .sort((a, b) => a.name.localeCompare(b.name)),
-      }))
-      .filter(({ models }) => models.length > 0)
+    return listEnabledModelGroups(config, providers)
   }, [config, providers])
 
   const selectedModelEnabled = useMemo(

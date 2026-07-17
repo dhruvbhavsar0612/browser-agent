@@ -3,6 +3,7 @@ import {
   SENSITIVE_DEFAULT_RULES,
   evaluate,
   fromConfig,
+  listEnabledModelGroups,
   rulesForExecutionMode,
   type AppConfigType,
   type ModelDiscoverySource,
@@ -221,25 +222,21 @@ export function SettingsView() {
 
   const modelOptions = useMemo(() => {
     if (!config) return []
-    return providers
-      .filter((provider) => {
-        const providerConfig = config.provider[provider.id]
-        if (!providerConfig?.enabled) return false
-        return CATALOG_PROVIDER_IDS.has(provider.id)
-          ? hasAnyCredential(vaultEntries, provider.id)
-          : Boolean(
-              providerConfig.api ??
-              (providerConfig.options as { baseURL?: string } | undefined)?.baseURL,
-            )
-      })
-      .map((provider) => ({
-        provider,
-        models: [...provider.models]
-          .filter((model) => config.provider[provider.id]?.models[model.id]?.enabled)
-          .sort((a, b) => a.name.localeCompare(b.name)),
-      }))
-      .filter(({ models }) => models.length > 0)
-  }, [config, providers, vaultEntries])
+    const connections = Object.fromEntries(
+      Object.keys(config.provider).map((providerId) => [
+        providerId,
+        {
+          hasCredential: hasAnyCredential(vaultEntries, providerId),
+          hasEndpoint: Boolean(
+            config.provider[providerId]?.api ??
+              (config.provider[providerId]?.options as { baseURL?: string } | undefined)?.baseURL ??
+              (providerId === 'openai-compatible' ? baseURL.trim() : customURLs[providerId]?.trim()),
+          ),
+        },
+      ]),
+    )
+    return listEnabledModelGroups(config, providers, { connections })
+  }, [baseURL, config, customURLs, providers, vaultEntries])
 
   async function saveKey(providerId: KeyProviderId) {
     const secret = keyInputs[providerId]?.trim()
@@ -1213,6 +1210,7 @@ export function SettingsView() {
         {modelOptions.length === 0 ? (
           <p className="settings-hint">
             Connect and enable a provider, discover its models, then enable at least one model.
+            Enabled models appear here and in the Chat model picker.
           </p>
         ) : null}
 

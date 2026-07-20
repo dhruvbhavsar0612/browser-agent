@@ -20,13 +20,18 @@
   cursor: pointer;
   transition:
     border-color var(--motion-fast) var(--ease-out),
-    background-color var(--motion-fast) var(--ease-out);
+    background-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .session-switcher-trigger:hover,
 .session-switcher-trigger[aria-expanded='true'] {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--accent-soft);
+}
+
+.session-switcher-trigger[aria-expanded='true'] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .session-switcher-title {
@@ -41,6 +46,11 @@
   font-size: 10px;
   color: var(--muted);
   line-height: 1;
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.session-switcher-trigger[aria-expanded='true'] .session-switcher-chevron {
+  transform: rotate(180deg);
 }
 
 .session-switcher-menu {
@@ -56,18 +66,18 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow), 0 12px 28px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-elevated), 0 16px 40px rgba(0, 0, 0, 0.15);
   animation: session-menu-in var(--motion-fast) var(--ease-out) both;
 }
 
 @keyframes session-menu-in {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(-6px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -83,6 +93,17 @@
   padding: 4px;
   overflow-y: auto;
   max-height: 280px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.session-switcher-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.session-switcher-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 .session-switcher-row {
@@ -114,6 +135,10 @@
 .session-switcher-item:hover,
 .session-switcher-item.active {
   background: var(--accent-soft);
+}
+
+.session-switcher-item.active {
+  color: var(--accent);
 }
 
 .session-switcher-item-title {
@@ -153,7 +178,7 @@
 
 .session-switcher-delete:hover {
   color: var(--err);
-  background: color-mix(in srgb, var(--err) 12%, transparent);
+  background: color-mix(in srgb, var(--err) 10%, transparent);
 }
 
 .session-switcher-empty {

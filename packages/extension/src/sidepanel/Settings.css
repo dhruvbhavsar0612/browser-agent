@@ -12,14 +12,21 @@
   margin: 0 0 4px;
   font-family: var(--font-display);
   font-size: 20px;
-  font-weight: 650;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  /* Gradient brand treatment — inherits --brand-gradient from styles.css */
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: var(--text);
 }
 
 .settings-lede {
   margin: 0 0 4px;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .settings-section {
@@ -31,10 +38,10 @@
 
 .settings-section h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--muted);
 }
 
@@ -45,8 +52,17 @@
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 75%, transparent);
+  box-shadow: var(--shadow);
   min-width: 0;
+  transition:
+    border-color var(--motion-fast) cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow var(--motion-fast) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.settings-provider:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  box-shadow: var(--shadow-elevated);
 }
 
 .settings-provider-header {
@@ -117,17 +133,19 @@
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-elevated);
   color: var(--text);
   font: inherit;
   font-size: 13px;
   box-sizing: border-box;
+  transition: border-color var(--motion-fast) cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .settings-input:focus,
 .settings-select:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .settings-row {

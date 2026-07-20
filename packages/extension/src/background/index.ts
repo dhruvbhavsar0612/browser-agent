@@ -67,7 +67,7 @@ bus
     }
     const session = await sessions.createSession({
       title: payload.title,
-      agent: payload.agent ?? 'browse',
+      agent: payload.agent ?? 'act',
       model,
     })
     return createResponse(message, 'session.create', session)

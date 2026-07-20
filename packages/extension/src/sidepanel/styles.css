@@ -84,7 +84,7 @@ body,
 
 .app {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
   height: 100%;
   min-height: 0;
   max-height: 100%;
@@ -162,11 +162,6 @@ body,
 @media (max-width: 320px) {
   .brand {
     font-size: 14px;
-  }
-
-  .nav-item {
-    padding: 8px 6px;
-    font-size: 12px;
   }
 }
 
@@ -323,49 +318,31 @@ body,
   opacity: 0.85;
 }
 
-/* ── Bottom nav ── */
+/* ── Header icon button (e.g. Settings gear) ── */
 
-.nav {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  backdrop-filter: blur(8px);
-  transition:
-    background-color var(--motion-medium) var(--ease-out),
-    border-color var(--motion-medium) var(--ease-out);
-}
-
-.nav-item {
+.header-icon-btn {
   appearance: none;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  font: inherit;
-  font-size: 13px;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
   transition:
     background-color var(--motion-fast) var(--ease-out),
     color var(--motion-fast) var(--ease-out),
     border-color var(--motion-fast) var(--ease-out);
 }
 
-.nav-item:hover:not(.active) {
-  color: var(--text-secondary);
-  background: var(--bg-subtle);
-}
-
-.nav-item.active {
+.header-icon-btn:hover {
   color: var(--text);
+  background: var(--bg-subtle);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-  background: var(--accent-soft);
-}
-
-.nav-item:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }

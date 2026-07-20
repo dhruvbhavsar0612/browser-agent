@@ -1,0 +1,14 @@
+.settings-page {
+  min-height: 100vh;
+  background: var(--gradient-atmo);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.settings-page-inner {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}

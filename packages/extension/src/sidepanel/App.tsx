@@ -9,10 +9,7 @@ import {
 import { sendRequest } from './client.js'
 import { ChatView } from './Chat.js'
 import { SessionSwitcher } from './SessionSwitcher.js'
-import { SettingsView } from './Settings.js'
 import { ThemeProvider, useTheme, type ThemeMode } from './ThemeProvider.js'
-
-type View = 'chat' | 'settings'
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'system', label: 'Auto' },
@@ -28,10 +25,9 @@ const EXECUTION_OPTIONS: { value: ExecutionMode; label: string; title: string }[
 
 function AppContent() {
   const { mode, setMode } = useTheme()
-  const [view, setView] = useState<View>('chat')
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking')
   const [agents, setAgents] = useState<AgentInfo[]>([])
-  const [selectedAgent, setSelectedAgent] = useState('browse')
+  const [selectedAgent, setSelectedAgent] = useState('act')
   const [sessions, setSessions] = useState<SessionRecord[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('approval')
@@ -69,8 +65,8 @@ function AppContent() {
         const visible = listVisibleAgents(config)
         setAgents(visible)
         if (config.executionMode) setExecutionMode(config.executionMode)
-        if (visible.some((agent) => agent.name === 'browse')) {
-          setSelectedAgent('browse')
+        if (visible.some((agent) => agent.name === 'act')) {
+          setSelectedAgent('act')
         } else if (visible[0]) {
           setSelectedAgent(visible[0].name)
         }
@@ -95,12 +91,10 @@ function AppContent() {
 
   const onNewChat = useCallback(() => {
     setActiveSessionId(null)
-    setView('chat')
   }, [])
 
   const onSelectSession = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId)
-    setView('chat')
   }, [])
 
   const onDeleteSession = useCallback(
@@ -119,6 +113,10 @@ function AppContent() {
 
   const onSessionChange = useCallback((session: SessionRecord | null) => {
     setActiveSessionId(session?.id ?? null)
+  }, [])
+
+  const openSettings = useCallback(() => {
+    void chrome.runtime.openOptionsPage()
   }, [])
 
   return (
@@ -181,39 +179,27 @@ function AppContent() {
             ))}
           </div>
           <div className={`status status-${status}`}>{status}</div>
+          <button
+            type="button"
+            className="header-icon-btn"
+            aria-label="Open Settings"
+            title="Settings"
+            onClick={openSettings}
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
       <main className="main main-fill">
-        {view === 'chat' ? (
-          <ChatView
-            key={activeSessionId ?? 'new'}
-            selectedAgent={selectedAgent}
-            sessionId={activeSessionId}
-            onSessionChange={onSessionChange}
-            onSessionsRefresh={refreshSessions}
-          />
-        ) : (
-          <SettingsView />
-        )}
+        <ChatView
+          key={activeSessionId ?? 'new'}
+          selectedAgent={selectedAgent}
+          sessionId={activeSessionId}
+          onSessionChange={onSessionChange}
+          onSessionsRefresh={refreshSessions}
+        />
       </main>
-
-      <nav className="nav" aria-label="Main navigation">
-        <button
-          type="button"
-          className={`nav-item ${view === 'chat' ? 'active' : ''}`}
-          onClick={() => setView('chat')}
-        >
-          Chat
-        </button>
-        <button
-          type="button"
-          className={`nav-item ${view === 'settings' ? 'active' : ''}`}
-          onClick={() => setView('settings')}
-        >
-          Settings
-        </button>
-      </nav>
     </div>
   )
 }

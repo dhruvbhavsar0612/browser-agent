@@ -195,4 +195,38 @@ describe('runAgentLoop', () => {
     expect(events.find((event) => event.kind === 'text-delta')).toMatchObject({ text: 'Partial' })
     expect(events.at(-1)).toEqual({ kind: 'error', message: 'context length exceeded' })
   })
+
+  it('forwards providerOptions to streamText', async () => {
+    mockFullStream([
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    const providerOptions = { openai: { reasoningEffort: 'high' } }
+    await runAgentLoop({
+      model: {} as never,
+      messages: [{ role: 'user', content: 'Think hard' }],
+      onEvent: () => {},
+      providerOptions,
+    })
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerOptions }),
+    )
+  })
+
+  it('omits providerOptions from streamText when not set', async () => {
+    mockFullStream([
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+
+    await runAgentLoop({
+      model: {} as never,
+      messages: [{ role: 'user', content: 'Hello' }],
+      onEvent: () => {},
+    })
+
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerOptions: undefined }),
+    )
+  })
 })

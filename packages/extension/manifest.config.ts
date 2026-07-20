@@ -28,6 +28,10 @@ export default defineManifest({
   side_panel: {
     default_path: 'src/sidepanel/index.html',
   },
+  options_ui: {
+    page: 'src/settings/index.html',
+    open_in_tab: true,
+  },
   permissions: [
     'sidePanel',
     'storage',

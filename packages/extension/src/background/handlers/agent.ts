@@ -15,6 +15,7 @@ import {
   parseModelRef,
   prepareSessionPrompt,
   resolveModelRef,
+  resolveReasoningProviderOptions,
   runAgentLoop,
   toAiSdkTools,
   toModelMessages,
@@ -119,7 +120,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
     startKeepalive()
     try {
       const appConfig = await deps.config.get()
-      const agentName = payload.agent ?? 'browse'
+      const agentName = payload.agent ?? 'act'
       const agentInfo = getAgent(agentName, appConfig)
       const session =
         payload.sessionId && deps.sessions
@@ -166,6 +167,9 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         headers: providerConfig?.options?.headers,
         name: providerConfig?.name ?? modelRef.providerID,
       })
+
+      const modelConfig = providerConfig?.models[modelRef.modelID]
+      const providerOptions = resolveReasoningProviderOptions(modelRef.providerID, modelConfig)
 
       const ruleset = buildRunRuleset({
         executionMode: appConfig.executionMode,
@@ -324,6 +328,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         tools,
         steps: agentInfo?.steps ?? 5,
         abortSignal: controller.signal,
+        providerOptions: providerOptions as Parameters<typeof runAgentLoop>[0]['providerOptions'],
         onEvent: push,
         session:
           payload.sessionId && deps.sessions

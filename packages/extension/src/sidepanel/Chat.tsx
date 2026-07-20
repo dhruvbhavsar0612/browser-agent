@@ -47,7 +47,7 @@ export function ChatView({
   onSessionChange,
   onSessionsRefresh,
 }: ChatViewProps) {
-  const agent = selectedAgent ?? 'browse'
+  const agent = selectedAgent ?? 'act'
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -542,7 +542,7 @@ export function ChatView({
             <h2>What can I help with?</h2>
             <p>
               Connect and enable a provider in Settings, enable a model, then ask the agent to
-              browse, read, or act on the current tab.
+              act on, read, or navigate the current tab.
             </p>
           </div>
         ) : (

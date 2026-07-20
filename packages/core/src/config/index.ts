@@ -51,3 +51,4 @@ export {
   providerInfoFromEnabledConfig,
 } from './enabled-models.js'
 export type { EnabledModelGroup, ProviderConnection } from './enabled-models.js'
+export { resolveReasoningProviderOptions } from './reasoning.js'

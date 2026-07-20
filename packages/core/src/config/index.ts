@@ -8,6 +8,7 @@ export {
   McpToolConfig,
   McpAuthConfig,
   CompactionConfig,
+  ReasoningEffort,
   DEFAULT_CONFIG,
   parseConfig,
   mergeConfig,
@@ -30,6 +31,7 @@ export type {
   McpAuthConfig as McpAuthConfigType,
   CompactionConfig as CompactionConfigType,
   ExecutionMode,
+  ReasoningEffort as ReasoningEffortType,
 } from './schema.js'
 export { ConfigService } from './service.js'
 export {
@@ -51,3 +53,4 @@ export {
   providerInfoFromEnabledConfig,
 } from './enabled-models.js'
 export type { EnabledModelGroup, ProviderConnection } from './enabled-models.js'
+export { resolveReasoningProviderOptions } from './reasoning.js'

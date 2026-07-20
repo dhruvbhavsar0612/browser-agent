@@ -35,6 +35,8 @@ export type AgentLoopOptions = {
   onEvent: (event: StreamEvent) => void
   doomLoop?: DoomLoopOptions
   session?: AgentLoopSession
+  /** Provider-specific options forwarded to streamText (e.g. reasoning effort). */
+  providerOptions?: Parameters<typeof streamText>[0]['providerOptions']
   onContextOverflow?: (
     error: unknown,
   ) => Promise<{ messages: ModelMessage[]; system?: string } | null>
@@ -141,6 +143,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         tools: options.tools,
         stopWhen,
         abortSignal: options.abortSignal,
+        providerOptions: options.providerOptions,
       })
       streamResult = await processFullStream(result.fullStream, {
         onEvent,

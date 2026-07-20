@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   SENSITIVE_DEFAULT_RULES,
   evaluate,
@@ -6,8 +6,10 @@ import {
   listEnabledModelGroups,
   rulesForExecutionMode,
   type AppConfigType,
+  type CompactionConfigType,
   type ModelDiscoverySource,
   type ProviderInfo,
+  type ReasoningEffortType,
   type VaultListEntry,
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
@@ -27,7 +29,16 @@ const KEY_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter', oauth: false as const },
   { id: 'openai-compatible', label: 'OpenAI-compatible', oauth: false as const },
 ] as const
+
 const CATALOG_PROVIDER_IDS = new Set(['anthropic', 'openai', 'google', 'openrouter'])
+
+const NAV_SECTIONS = [
+  { id: 'providers', label: 'Providers' },
+  { id: 'defaults', label: 'Defaults' },
+  { id: 'agent', label: 'Agent' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'permissions', label: 'Permissions' },
+] as const
 
 type KeyProviderId = string
 type OAuthProviderId = 'openai' | 'anthropic'
@@ -88,6 +99,10 @@ export function SettingsView() {
   const [oauthManual, setOauthManual] = useState<Partial<Record<OAuthProviderId, boolean>>>({})
   const [oauthAuthUrl, setOauthAuthUrl] = useState<Partial<Record<OAuthProviderId, string>>>({})
   const [oauthMessage, setOauthMessage] = useState<Partial<Record<OAuthProviderId, string>>>({})
+  const [compactionDraft, setCompactionDraft] = useState<CompactionConfigType | null>(null)
+  const [savingCompaction, setSavingCompaction] = useState(false)
+  const [activeSection, setActiveSection] = useState<string>('providers')
+  const mainRef = useRef<HTMLElement>(null)
 
   const applyModelsResponse = useCallback((modelsRes: Awaited<ReturnType<typeof sendRequest>>) => {
     if (modelsRes.type === 'error') {
@@ -154,6 +169,7 @@ export function SettingsView() {
       applyModelsResponse(modelsRes)
       setVaultEntries(entries)
       setConfig(cfg)
+      setCompactionDraft(cfg.compaction)
       setSelectedModel(cfg.model ?? '')
       setBaseURL(
         cfg.provider['openai-compatible']?.api ??
@@ -182,7 +198,14 @@ export function SettingsView() {
     void load()
   }, [load])
 
-  // Poll vault while a manual OAuth paste UI is open (background tab may finish first)
+  // Sync compaction draft when config changes externally
+  useEffect(() => {
+    if (config && !savingCompaction) {
+      setCompactionDraft(config.compaction)
+    }
+  }, [config, savingCompaction])
+
+  // Poll vault while a manual OAuth paste UI is open
   useEffect(() => {
     const pendingProviders = (Object.keys(oauthManual) as OAuthProviderId[]).filter(
       (id) => oauthManual[id],
@@ -219,6 +242,26 @@ export function SettingsView() {
       window.clearInterval(id)
     }
   }, [config, oauthManual, refreshModels])
+
+  // Track active section via IntersectionObserver
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setActiveSection(entry.target.id)
+          }
+        }
+      },
+      { rootMargin: '-20% 0px -70% 0px' },
+    )
+    const ids = NAV_SECTIONS.map((s) => s.id)
+    for (const id of ids) {
+      const el = document.getElementById(id)
+      if (el) observer.observe(el)
+    }
+    return () => observer.disconnect()
+  }, [loading])
 
   const modelOptions = useMemo(() => {
     if (!config) return []
@@ -380,6 +423,34 @@ export function SettingsView() {
       }
       setConfig(response.payload as AppConfigType)
       if (clearsDefault) setSelectedModel('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function setModelReasoningEffort(
+    provider: ProviderInfo,
+    modelId: string,
+    effort: ReasoningEffortType | '',
+  ) {
+    if (!config) return
+    setError(null)
+    try {
+      const response = await sendRequest('config.set', {
+        provider: {
+          [provider.id]: {
+            models: {
+              [modelId]: {
+                reasoning_effort: effort as ReasoningEffortType,
+              },
+            },
+          },
+        },
+      })
+      if (response.type === 'error') {
+        throw new Error(String((response.payload as { message?: string })?.message))
+      }
+      setConfig(response.payload as AppConfigType)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -628,6 +699,27 @@ export function SettingsView() {
     }
   }
 
+  async function saveCompaction() {
+    if (!config || !compactionDraft) return
+    setSavingCompaction(true)
+    setError(null)
+    try {
+      const response = await sendRequest('config.set', { compaction: compactionDraft })
+      if (response.type === 'error') {
+        throw new Error(String((response.payload as { message?: string })?.message))
+      }
+      setConfig(response.payload as AppConfigType)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSavingCompaction(false)
+    }
+  }
+
+  function scrollToSection(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   if (loading) {
     return (
       <div className="settings">
@@ -638,146 +730,524 @@ export function SettingsView() {
 
   return (
     <div className="settings">
-      <div>
+      <div className="settings-header">
         <h1>Settings</h1>
-        <p className="settings-lede">
-          Bring your own API keys. Secrets stay encrypted in local storage only.
-        </p>
+        <p className="settings-lede">Bring your own API keys. Secrets stay encrypted in local storage only.</p>
       </div>
 
       {error ? <p className="settings-error">{error}</p> : null}
 
-      <section className="settings-section">
-        <h2>API keys &amp; accounts</h2>
-        {KEY_PROVIDERS.map((provider) => {
-          const configured = hasKey(vaultEntries, provider.id, 'api')
-          const oauthConnected = provider.oauth && hasKey(vaultEntries, provider.id, 'oauth')
-          const anyCred = hasAnyCredential(vaultEntries, provider.id)
-          const enabled = config?.provider[provider.id]?.enabled === true
-          const connected = provider.id === 'openai-compatible' ? Boolean(baseURL.trim()) : anyCred
-          const discovered = providers.find((item) => item.id === provider.id)
-          const providerDiscovery = discovery[provider.id]
-          const query = (modelSearch[provider.id] ?? '').trim().toLowerCase()
-          const visibleModels =
-            discovered?.models.filter(
-              (model) =>
-                !query ||
-                model.name.toLowerCase().includes(query) ||
-                model.id.toLowerCase().includes(query),
-            ) ?? []
-          return (
-            <div key={provider.id} className="settings-provider">
-              <div className="settings-provider-header">
-                <span className="settings-provider-name">{provider.label}</span>
-                <div className="settings-provider-badges">
-                  <label className="settings-enable">
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={(event) => void toggleProvider(provider.id, event.target.checked)}
-                    />
-                    Enabled
-                  </label>
-                  {oauthConnected ? (
-                    <span className="settings-badge settings-badge-ok">OAuth</span>
-                  ) : null}
-                  <span className={`settings-badge ${connected ? 'settings-badge-ok' : ''}`}>
-                    {connected ? 'Connected' : 'Disconnected'}
-                  </span>
-                </div>
-              </div>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {NAV_SECTIONS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              className={`settings-nav-item${activeSection === section.id ? ' settings-nav-item-active' : ''}`}
+              onClick={() => scrollToSection(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </nav>
 
-              {provider.id === 'google' ? (
-                <p className="settings-hint">
-                  Gemini models via Google AI Studio.{' '}
-                  <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-                    Get an API key
-                  </a>
-                </p>
-              ) : null}
+        <main className="settings-main" ref={mainRef}>
+          {/* ── Providers ─────────────────────────────── */}
+          <section className="settings-section" id="providers">
+            <div className="settings-section-heading">
+              <h2>Providers</h2>
+              <p className="settings-section-desc">
+                Connect API keys or OAuth accounts, then discover and enable models.
+              </p>
+            </div>
 
-              {provider.id === 'openai-compatible' ? (
-                <>
-                  <div className="settings-field">
-                    <label htmlFor="base-url">Base URL</label>
-                    <input
-                      id="base-url"
-                      className="settings-input"
-                      type="url"
-                      placeholder="https://opencode.ai/zen/go/v1"
-                      value={baseURL}
-                      onChange={(e) => setBaseURL(e.target.value)}
-                      onBlur={() =>
-                        void saveBaseURL().catch((err) =>
-                          setError(err instanceof Error ? err.message : String(err)),
-                        )
-                      }
-                    />
-                    <p className="settings-hint">
-                      Models are loaded from <code>{'{baseURL}'}/models</code> after you save.
-                    </p>
+            {KEY_PROVIDERS.map((provider) => {
+              const configured = hasKey(vaultEntries, provider.id, 'api')
+              const oauthConnected = provider.oauth && hasKey(vaultEntries, provider.id, 'oauth')
+              const anyCred = hasAnyCredential(vaultEntries, provider.id)
+              const enabled = config?.provider[provider.id]?.enabled === true
+              const connected =
+                provider.id === 'openai-compatible' ? Boolean(baseURL.trim()) : anyCred
+              const discovered = providers.find((item) => item.id === provider.id)
+              const providerDiscovery = discovery[provider.id]
+              const query = (modelSearch[provider.id] ?? '').trim().toLowerCase()
+              const visibleModels =
+                discovered?.models.filter(
+                  (model) =>
+                    !query ||
+                    model.name.toLowerCase().includes(query) ||
+                    model.id.toLowerCase().includes(query),
+                ) ?? []
+              return (
+                <div key={provider.id} className="settings-provider">
+                  {/* Step A: Enable */}
+                  <div className="settings-provider-header">
+                    <div className="settings-provider-title">
+                      <span className="settings-step-badge">A</span>
+                      <span className="settings-provider-name">{provider.label}</span>
+                    </div>
+                    <div className="settings-provider-badges">
+                      <label className="settings-enable">
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          onChange={(event) =>
+                            void toggleProvider(provider.id, event.target.checked)
+                          }
+                        />
+                        Enabled
+                      </label>
+                      {oauthConnected ? (
+                        <span className="settings-badge settings-badge-ok">OAuth</span>
+                      ) : null}
+                      <span className={`settings-badge ${connected ? 'settings-badge-ok' : ''}`}>
+                        {connected ? 'Connected' : 'Disconnected'}
+                      </span>
+                    </div>
                   </div>
-                </>
-              ) : null}
 
-              {provider.oauth ? (
-                <div className="settings-oauth">
-                  <div className="settings-oauth-title">Sign in with {provider.oauthLabel}</div>
-                  <p className="settings-hint">
-                    Optional OAuth alongside a BYOK API key. OAuth is preferred when both are set.
-                  </p>
-                  <div className="settings-row">
-                    {oauthConnected ? (
-                      <button
-                        type="button"
-                        className="settings-btn settings-btn-danger"
-                        disabled={oauthBusy === provider.id}
-                        onClick={() => void disconnectOAuth(provider.id)}
-                      >
-                        {oauthBusy === provider.id
-                          ? 'Working…'
-                          : `Disconnect ${provider.oauthLabel}`}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="settings-btn settings-btn-primary"
-                        disabled={oauthBusy === provider.id}
-                        onClick={() => void connectOAuth(provider.id)}
-                      >
-                        {oauthBusy === provider.id
-                          ? 'Connecting…'
-                          : `Connect ${provider.oauthLabel}`}
-                      </button>
-                    )}
-                  </div>
-                  {oauthMessage[provider.id] ? (
-                    <p className="settings-hint">{oauthMessage[provider.id]}</p>
-                  ) : null}
-                  {oauthManual[provider.id] ? (
-                    <>
-                      {oauthAuthUrl[provider.id] ? (
+                  {/* Step B: Connect */}
+                  <div className="settings-provider-step">
+                    <span className="settings-step-badge settings-step-badge-muted">B</span>
+                    <div className="settings-step-body">
+                      {provider.id === 'google' ? (
                         <p className="settings-hint">
-                          If the tab did not open,{' '}
-                          <a href={oauthAuthUrl[provider.id]} target="_blank" rel="noreferrer">
-                            open sign-in
+                          Gemini models via Google AI Studio.{' '}
+                          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+                            Get an API key
                           </a>
-                          .
                         </p>
                       ) : null}
+
+                      {provider.id === 'openai-compatible' ? (
+                        <div className="settings-field">
+                          <label htmlFor="base-url">Base URL</label>
+                          <input
+                            id="base-url"
+                            className="settings-input"
+                            type="url"
+                            placeholder="https://opencode.ai/zen/go/v1"
+                            value={baseURL}
+                            onChange={(e) => setBaseURL(e.target.value)}
+                            onBlur={() =>
+                              void saveBaseURL().catch((err) =>
+                                setError(err instanceof Error ? err.message : String(err)),
+                              )
+                            }
+                          />
+                          <p className="settings-hint">
+                            Models are loaded from <code>{'{baseURL}'}/models</code> after you save.
+                          </p>
+                        </div>
+                      ) : null}
+
+                      {provider.oauth ? (
+                        <div className="settings-oauth">
+                          <div className="settings-oauth-title">
+                            Sign in with {provider.oauthLabel}
+                          </div>
+                          <p className="settings-hint">
+                            Optional OAuth alongside a BYOK API key. OAuth is preferred when both
+                            are set.
+                          </p>
+                          <div className="settings-row">
+                            {oauthConnected ? (
+                              <button
+                                type="button"
+                                className="settings-btn settings-btn-danger"
+                                disabled={oauthBusy === provider.id}
+                                onClick={() => void disconnectOAuth(provider.id)}
+                              >
+                                {oauthBusy === provider.id
+                                  ? 'Working…'
+                                  : `Disconnect ${provider.oauthLabel}`}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="settings-btn settings-btn-primary"
+                                disabled={oauthBusy === provider.id}
+                                onClick={() => void connectOAuth(provider.id)}
+                              >
+                                {oauthBusy === provider.id
+                                  ? 'Connecting…'
+                                  : `Connect ${provider.oauthLabel}`}
+                              </button>
+                            )}
+                          </div>
+                          {oauthMessage[provider.id] ? (
+                            <p className="settings-hint">{oauthMessage[provider.id]}</p>
+                          ) : null}
+                          {oauthManual[provider.id] ? (
+                            <>
+                              {oauthAuthUrl[provider.id] ? (
+                                <p className="settings-hint">
+                                  If the tab did not open,{' '}
+                                  <a
+                                    href={oauthAuthUrl[provider.id]}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    open sign-in
+                                  </a>
+                                  .
+                                </p>
+                              ) : null}
+                              <div className="settings-field">
+                                <label htmlFor={`oauth-code-${provider.id}`}>
+                                  Authorization code
+                                </label>
+                                <input
+                                  id={`oauth-code-${provider.id}`}
+                                  className="settings-input"
+                                  type="text"
+                                  autoComplete="off"
+                                  placeholder="Paste code or callback URL"
+                                  value={oauthPaste[provider.id] ?? ''}
+                                  onChange={(e) =>
+                                    setOauthPaste((prev) => ({
+                                      ...prev,
+                                      [provider.id]: e.target.value,
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div className="settings-row">
+                                <button
+                                  type="button"
+                                  className="settings-btn settings-btn-primary"
+                                  disabled={
+                                    !oauthPaste[provider.id]?.trim() ||
+                                    oauthBusy === provider.id
+                                  }
+                                  onClick={() => void completeOAuth(provider.id)}
+                                >
+                                  Complete sign-in
+                                </button>
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+
                       <div className="settings-field">
-                        <label htmlFor={`oauth-code-${provider.id}`}>Authorization code</label>
+                        <label htmlFor={`key-${provider.id}`}>API key</label>
                         <input
-                          id={`oauth-code-${provider.id}`}
+                          id={`key-${provider.id}`}
                           className="settings-input"
-                          type="text"
+                          type="password"
                           autoComplete="off"
-                          placeholder="Paste code or callback URL"
-                          value={oauthPaste[provider.id] ?? ''}
+                          placeholder={
+                            configured
+                              ? 'Enter new key to replace'
+                              : provider.id === 'google'
+                                ? 'AIza…'
+                                : 'sk-…'
+                          }
+                          value={keyInputs[provider.id] ?? ''}
                           onChange={(e) =>
-                            setOauthPaste((prev) => ({
+                            setKeyInputs((prev) => ({
                               ...prev,
                               [provider.id]: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="settings-row">
+                        <button
+                          type="button"
+                          className="settings-btn settings-btn-primary"
+                          disabled={!keyInputs[provider.id]?.trim() || savingKey === provider.id}
+                          onClick={() => void saveKey(provider.id)}
+                        >
+                          {savingKey === provider.id ? 'Saving…' : 'Save key'}
+                        </button>
+                        {configured ? (
+                          <button
+                            type="button"
+                            className="settings-btn settings-btn-danger"
+                            onClick={() => void deleteKey(provider.id, 'api')}
+                          >
+                            Remove key
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step C: Discover & enable models */}
+                  <div className="settings-provider-step">
+                    <span className="settings-step-badge settings-step-badge-muted">C</span>
+                    <div className="settings-step-body">
+                      <div className="settings-models">
+                        <div className="settings-row">
+                          <button
+                            type="button"
+                            className="settings-btn"
+                            disabled={
+                              !enabled || !connected || refreshingProvider === provider.id
+                            }
+                            onClick={() =>
+                              void refreshModels(provider.id).catch((err) =>
+                                setError(err instanceof Error ? err.message : String(err)),
+                              )
+                            }
+                          >
+                            {refreshingProvider === provider.id
+                              ? 'Discovering…'
+                              : discovered
+                                ? 'Refresh models'
+                                : 'Discover models'}
+                          </button>
+                          {discovered ? (
+                            <>
+                              <button
+                                type="button"
+                                className="settings-btn"
+                                onClick={() => void setAllModelsEnabled(discovered, true)}
+                              >
+                                Enable all
+                              </button>
+                              <button
+                                type="button"
+                                className="settings-btn"
+                                onClick={() => void setAllModelsEnabled(discovered, false)}
+                              >
+                                Disable all
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                        {!enabled ? (
+                          <p className="settings-hint">
+                            Enable this provider to discover or use models.
+                          </p>
+                        ) : !connected ? (
+                          <p className="settings-hint">
+                            {provider.id === 'openai-compatible'
+                              ? 'Save a base URL to connect this provider.'
+                              : 'Add an API key or OAuth account to connect this provider.'}
+                          </p>
+                        ) : !discovered ? (
+                          <p className="settings-hint">No models discovered yet.</p>
+                        ) : (
+                          <>
+                            <input
+                              className="settings-input"
+                              type="search"
+                              placeholder={`Search ${discovered.models.length} models…`}
+                              value={modelSearch[provider.id] ?? ''}
+                              onChange={(event) =>
+                                setModelSearch((prev) => ({
+                                  ...prev,
+                                  [provider.id]: event.target.value,
+                                }))
+                              }
+                            />
+                            <div className="settings-model-list">
+                              {visibleModels.map((model) => {
+                                const modelEnabled =
+                                  config?.provider[provider.id]?.models[model.id]?.enabled === true
+                                const currentEffort =
+                                  config?.provider[provider.id]?.models[model.id]?.reasoning_effort
+                                return (
+                                  <div className="settings-model-row" key={model.id}>
+                                    <label className="settings-model-check">
+                                      <input
+                                        type="checkbox"
+                                        checked={modelEnabled}
+                                        onChange={(event) =>
+                                          void setModelEnabled(
+                                            discovered,
+                                            model.id,
+                                            event.target.checked,
+                                          )
+                                        }
+                                      />
+                                      <span title={model.id}>{modelLabel(model)}</span>
+                                    </label>
+                                    {modelEnabled ? (
+                                      <div className="settings-model-effort">
+                                        <label
+                                          className="settings-model-effort-label"
+                                          htmlFor={`effort-${provider.id}-${model.id}`}
+                                        >
+                                          Thinking
+                                        </label>
+                                        <select
+                                          id={`effort-${provider.id}-${model.id}`}
+                                          className="settings-select settings-effort-select"
+                                          value={currentEffort ?? ''}
+                                          onChange={(e) =>
+                                            void setModelReasoningEffort(
+                                              discovered,
+                                              model.id,
+                                              e.target.value as ReasoningEffortType | '',
+                                            )
+                                          }
+                                        >
+                                          <option value="">— default</option>
+                                          <option value="none">none</option>
+                                          <option value="low">low</option>
+                                          <option value="medium">medium</option>
+                                          <option value="high">high</option>
+                                        </select>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                )
+                              })}
+                              {visibleModels.length === 0 ? (
+                                <p className="settings-hint">No models match this search.</p>
+                              ) : null}
+                            </div>
+                          </>
+                        )}
+                        {providerDiscovery ? (
+                          <p
+                            className={`settings-hint${providerDiscovery.offline ? ' settings-offline' : ''}`}
+                          >
+                            {providerDiscovery.offline
+                              ? 'Offline — using cached models. '
+                              : `Discovered ${discovered?.models.length ?? 0} models. `}
+                            {providerDiscovery.error ?? ''}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+
+            {/* Custom & local providers */}
+            <div className="settings-subsection">
+              <h3 className="settings-subsection-title">Custom &amp; local providers</h3>
+              <p className="settings-hint">
+                OpenAI-compatible endpoints discover models from{' '}
+                <code>{'{baseURL}'}/models</code>. API keys are optional for local servers.
+              </p>
+              <div className="settings-provider">
+                <div className="settings-field">
+                  <label htmlFor="custom-provider-id">Provider ID</label>
+                  <input
+                    id="custom-provider-id"
+                    className="settings-input"
+                    placeholder="ollama"
+                    value={customDraft.id}
+                    onChange={(event) =>
+                      setCustomDraft((prev) => ({ ...prev, id: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="custom-provider-name">Display name</label>
+                  <input
+                    id="custom-provider-name"
+                    className="settings-input"
+                    placeholder="Local Ollama"
+                    value={customDraft.name}
+                    onChange={(event) =>
+                      setCustomDraft((prev) => ({ ...prev, name: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="custom-provider-url">Base URL</label>
+                  <input
+                    id="custom-provider-url"
+                    className="settings-input"
+                    type="url"
+                    placeholder="http://127.0.0.1:11434/v1"
+                    value={customDraft.api}
+                    onChange={(event) =>
+                      setCustomDraft((prev) => ({ ...prev, api: event.target.value }))
+                    }
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="settings-btn"
+                  onClick={() => void addCustomProvider()}
+                >
+                  Add provider
+                </button>
+              </div>
+
+              {Object.entries(config?.provider ?? {})
+                .filter(([id]) => !KEY_PROVIDERS.some((provider) => provider.id === id))
+                .map(([providerId, providerConfig]) => {
+                  const discovered = providers.find((provider) => provider.id === providerId)
+                  const query = (modelSearch[providerId] ?? '').trim().toLowerCase()
+                  const visibleModels =
+                    discovered?.models.filter(
+                      (model) =>
+                        !query ||
+                        model.id.toLowerCase().includes(query) ||
+                        model.name.toLowerCase().includes(query),
+                    ) ?? []
+                  const connected = Boolean(customURLs[providerId]?.trim())
+                  const status = discovery[providerId]
+                  const configured = hasKey(vaultEntries, providerId)
+                  return (
+                    <div className="settings-provider" key={providerId}>
+                      <div className="settings-provider-header">
+                        <div className="settings-provider-title">
+                          <span className="settings-provider-name">
+                            {providerConfig.name ?? providerId}
+                          </span>
+                        </div>
+                        <div className="settings-provider-badges">
+                          <label className="settings-enable">
+                            <input
+                              type="checkbox"
+                              checked={providerConfig.enabled}
+                              onChange={(event) =>
+                                void toggleProvider(providerId, event.target.checked)
+                              }
+                            />
+                            Enabled
+                          </label>
+                          <span
+                            className={`settings-badge ${connected ? 'settings-badge-ok' : ''}`}
+                          >
+                            {connected ? 'Configured' : 'Disconnected'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor={`custom-url-${providerId}`}>Base URL</label>
+                        <input
+                          id={`custom-url-${providerId}`}
+                          className="settings-input"
+                          type="url"
+                          value={customURLs[providerId] ?? ''}
+                          onChange={(event) =>
+                            setCustomURLs((prev) => ({
+                              ...prev,
+                              [providerId]: event.target.value,
+                            }))
+                          }
+                          onBlur={() =>
+                            void saveCustomURL(providerId).catch((err) =>
+                              setError(err instanceof Error ? err.message : String(err)),
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="settings-field">
+                        <label htmlFor={`custom-key-${providerId}`}>API key (optional)</label>
+                        <input
+                          id={`custom-key-${providerId}`}
+                          className="settings-input"
+                          type="password"
+                          value={keyInputs[providerId] ?? ''}
+                          placeholder={configured ? 'Enter new key to replace' : 'Optional'}
+                          onChange={(event) =>
+                            setKeyInputs((prev) => ({
+                              ...prev,
+                              [providerId]: event.target.value,
                             }))
                           }
                         />
@@ -785,453 +1255,413 @@ export function SettingsView() {
                       <div className="settings-row">
                         <button
                           type="button"
-                          className="settings-btn settings-btn-primary"
-                          disabled={!oauthPaste[provider.id]?.trim() || oauthBusy === provider.id}
-                          onClick={() => void completeOAuth(provider.id)}
+                          className="settings-btn"
+                          disabled={!keyInputs[providerId]?.trim() || savingKey === providerId}
+                          onClick={() => void saveKey(providerId)}
                         >
-                          Complete sign-in
+                          {savingKey === providerId ? 'Saving…' : 'Save key'}
+                        </button>
+                        {configured ? (
+                          <button
+                            type="button"
+                            className="settings-btn settings-btn-danger"
+                            onClick={() => void deleteKey(providerId)}
+                          >
+                            Remove key
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="settings-btn"
+                          disabled={
+                            !providerConfig.enabled ||
+                            !connected ||
+                            refreshingProvider === providerId
+                          }
+                          onClick={() =>
+                            void refreshModels(providerId).catch((err) =>
+                              setError(err instanceof Error ? err.message : String(err)),
+                            )
+                          }
+                        >
+                          {refreshingProvider === providerId
+                            ? 'Discovering…'
+                            : discovered
+                              ? 'Refresh models'
+                              : 'Discover models'}
                         </button>
                       </div>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <div className="settings-field">
-                <label htmlFor={`key-${provider.id}`}>API key</label>
-                <input
-                  id={`key-${provider.id}`}
-                  className="settings-input"
-                  type="password"
-                  autoComplete="off"
-                  placeholder={
-                    configured
-                      ? 'Enter new key to replace'
-                      : provider.id === 'google'
-                        ? 'AIza…'
-                        : 'sk-…'
-                  }
-                  value={keyInputs[provider.id] ?? ''}
-                  onChange={(e) =>
-                    setKeyInputs((prev) => ({
-                      ...prev,
-                      [provider.id]: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="settings-row">
-                <button
-                  type="button"
-                  className="settings-btn settings-btn-primary"
-                  disabled={!keyInputs[provider.id]?.trim() || savingKey === provider.id}
-                  onClick={() => void saveKey(provider.id)}
-                >
-                  {savingKey === provider.id ? 'Saving…' : 'Save key'}
-                </button>
-                {configured ? (
-                  <button
-                    type="button"
-                    className="settings-btn settings-btn-danger"
-                    onClick={() => void deleteKey(provider.id, 'api')}
-                  >
-                    Remove key
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="settings-models">
-                <div className="settings-row">
-                  <button
-                    type="button"
-                    className="settings-btn"
-                    disabled={!enabled || !connected || refreshingProvider === provider.id}
-                    onClick={() =>
-                      void refreshModels(provider.id).catch((err) =>
-                        setError(err instanceof Error ? err.message : String(err)),
-                      )
-                    }
-                  >
-                    {refreshingProvider === provider.id
-                      ? 'Discovering…'
-                      : discovered
-                        ? 'Refresh models'
-                        : 'Discover models'}
-                  </button>
-                  {discovered ? (
-                    <>
-                      <button
-                        type="button"
-                        className="settings-btn"
-                        onClick={() => void setAllModelsEnabled(discovered, true)}
-                      >
-                        Enable all
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-btn"
-                        onClick={() => void setAllModelsEnabled(discovered, false)}
-                      >
-                        Disable all
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-                {!enabled ? (
-                  <p className="settings-hint">Enable this provider to discover or use models.</p>
-                ) : !connected ? (
-                  <p className="settings-hint">
-                    {provider.id === 'openai-compatible'
-                      ? 'Save a base URL to connect this provider.'
-                      : 'Add an API key or OAuth account to connect this provider.'}
-                  </p>
-                ) : !discovered ? (
-                  <p className="settings-hint">No models discovered yet.</p>
-                ) : (
-                  <>
-                    <input
-                      className="settings-input"
-                      type="search"
-                      placeholder={`Search ${discovered.models.length} models…`}
-                      value={modelSearch[provider.id] ?? ''}
-                      onChange={(event) =>
-                        setModelSearch((prev) => ({
-                          ...prev,
-                          [provider.id]: event.target.value,
-                        }))
-                      }
-                    />
-                    <div className="settings-model-list">
-                      {visibleModels.map((model) => {
-                        const modelEnabled =
-                          config?.provider[provider.id]?.models[model.id]?.enabled === true
-                        return (
-                          <label className="settings-model-row" key={model.id}>
-                            <input
-                              type="checkbox"
-                              checked={modelEnabled}
-                              onChange={(event) =>
-                                void setModelEnabled(discovered, model.id, event.target.checked)
-                              }
-                            />
-                            <span title={model.id}>{modelLabel(model)}</span>
-                          </label>
-                        )
-                      })}
-                      {visibleModels.length === 0 ? (
-                        <p className="settings-hint">No models match this search.</p>
-                      ) : null}
-                    </div>
-                  </>
-                )}
-                {providerDiscovery ? (
-                  <p
-                    className={`settings-hint${providerDiscovery.offline ? ' settings-offline' : ''}`}
-                  >
-                    {providerDiscovery.offline
-                      ? 'Offline — using cached models. '
-                      : `Discovered ${discovered?.models.length ?? 0} models. `}
-                    {providerDiscovery.error ?? ''}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          )
-        })}
-
-        <div className="settings-row">
-          <button
-            type="button"
-            className="settings-btn settings-btn-danger"
-            onClick={() => void clearAllKeys()}
-          >
-            Clear all keys
-          </button>
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>Custom &amp; local providers</h2>
-        <p className="settings-hint">
-          OpenAI-compatible endpoints discover models from <code>{'{baseURL}'}/models</code>. API
-          keys are optional for local servers.
-        </p>
-        <div className="settings-provider">
-          <div className="settings-field">
-            <label htmlFor="custom-provider-id">Provider ID</label>
-            <input
-              id="custom-provider-id"
-              className="settings-input"
-              placeholder="ollama"
-              value={customDraft.id}
-              onChange={(event) => setCustomDraft((prev) => ({ ...prev, id: event.target.value }))}
-            />
-          </div>
-          <div className="settings-field">
-            <label htmlFor="custom-provider-name">Display name</label>
-            <input
-              id="custom-provider-name"
-              className="settings-input"
-              placeholder="Local Ollama"
-              value={customDraft.name}
-              onChange={(event) =>
-                setCustomDraft((prev) => ({ ...prev, name: event.target.value }))
-              }
-            />
-          </div>
-          <div className="settings-field">
-            <label htmlFor="custom-provider-url">Base URL</label>
-            <input
-              id="custom-provider-url"
-              className="settings-input"
-              type="url"
-              placeholder="http://127.0.0.1:11434/v1"
-              value={customDraft.api}
-              onChange={(event) => setCustomDraft((prev) => ({ ...prev, api: event.target.value }))}
-            />
-          </div>
-          <button type="button" className="settings-btn" onClick={() => void addCustomProvider()}>
-            Add provider
-          </button>
-        </div>
-
-        {Object.entries(config?.provider ?? {})
-          .filter(([id]) => !KEY_PROVIDERS.some((provider) => provider.id === id))
-          .map(([providerId, providerConfig]) => {
-            const discovered = providers.find((provider) => provider.id === providerId)
-            const query = (modelSearch[providerId] ?? '').trim().toLowerCase()
-            const visibleModels =
-              discovered?.models.filter(
-                (model) =>
-                  !query ||
-                  model.id.toLowerCase().includes(query) ||
-                  model.name.toLowerCase().includes(query),
-              ) ?? []
-            const connected = Boolean(customURLs[providerId]?.trim())
-            const status = discovery[providerId]
-            const configured = hasKey(vaultEntries, providerId)
-            return (
-              <div className="settings-provider" key={providerId}>
-                <div className="settings-provider-header">
-                  <span className="settings-provider-name">
-                    {providerConfig.name ?? providerId}
-                  </span>
-                  <div className="settings-provider-badges">
-                    <label className="settings-enable">
-                      <input
-                        type="checkbox"
-                        checked={providerConfig.enabled}
-                        onChange={(event) => void toggleProvider(providerId, event.target.checked)}
-                      />
-                      Enabled
-                    </label>
-                    <span className={`settings-badge ${connected ? 'settings-badge-ok' : ''}`}>
-                      {connected ? 'Configured' : 'Disconnected'}
-                    </span>
-                  </div>
-                </div>
-                <div className="settings-field">
-                  <label htmlFor={`custom-url-${providerId}`}>Base URL</label>
-                  <input
-                    id={`custom-url-${providerId}`}
-                    className="settings-input"
-                    type="url"
-                    value={customURLs[providerId] ?? ''}
-                    onChange={(event) =>
-                      setCustomURLs((prev) => ({
-                        ...prev,
-                        [providerId]: event.target.value,
-                      }))
-                    }
-                    onBlur={() =>
-                      void saveCustomURL(providerId).catch((err) =>
-                        setError(err instanceof Error ? err.message : String(err)),
-                      )
-                    }
-                  />
-                </div>
-                <div className="settings-field">
-                  <label htmlFor={`custom-key-${providerId}`}>API key (optional)</label>
-                  <input
-                    id={`custom-key-${providerId}`}
-                    className="settings-input"
-                    type="password"
-                    value={keyInputs[providerId] ?? ''}
-                    placeholder={configured ? 'Enter new key to replace' : 'Optional'}
-                    onChange={(event) =>
-                      setKeyInputs((prev) => ({
-                        ...prev,
-                        [providerId]: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div className="settings-row">
-                  <button
-                    type="button"
-                    className="settings-btn"
-                    disabled={!keyInputs[providerId]?.trim() || savingKey === providerId}
-                    onClick={() => void saveKey(providerId)}
-                  >
-                    {savingKey === providerId ? 'Saving…' : 'Save key'}
-                  </button>
-                  {configured ? (
-                    <button
-                      type="button"
-                      className="settings-btn settings-btn-danger"
-                      onClick={() => void deleteKey(providerId)}
-                    >
-                      Remove key
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="settings-btn"
-                    disabled={
-                      !providerConfig.enabled || !connected || refreshingProvider === providerId
-                    }
-                    onClick={() =>
-                      void refreshModels(providerId).catch((err) =>
-                        setError(err instanceof Error ? err.message : String(err)),
-                      )
-                    }
-                  >
-                    {refreshingProvider === providerId
-                      ? 'Discovering…'
-                      : discovered
-                        ? 'Refresh models'
-                        : 'Discover models'}
-                  </button>
-                </div>
-                {discovered && providerConfig.enabled && connected ? (
-                  <div className="settings-models">
-                    <div className="settings-row">
-                      <button
-                        type="button"
-                        className="settings-btn"
-                        onClick={() => void setAllModelsEnabled(discovered, true)}
-                      >
-                        Enable all
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-btn"
-                        onClick={() => void setAllModelsEnabled(discovered, false)}
-                      >
-                        Disable all
-                      </button>
-                    </div>
-                    <input
-                      className="settings-input"
-                      type="search"
-                      placeholder={`Search ${discovered.models.length} models…`}
-                      value={modelSearch[providerId] ?? ''}
-                      onChange={(event) =>
-                        setModelSearch((prev) => ({
-                          ...prev,
-                          [providerId]: event.target.value,
-                        }))
-                      }
-                    />
-                    <div className="settings-model-list">
-                      {visibleModels.map((model) => (
-                        <label className="settings-model-row" key={model.id}>
+                      {discovered && providerConfig.enabled && connected ? (
+                        <div className="settings-models">
+                          <div className="settings-row">
+                            <button
+                              type="button"
+                              className="settings-btn"
+                              onClick={() => void setAllModelsEnabled(discovered, true)}
+                            >
+                              Enable all
+                            </button>
+                            <button
+                              type="button"
+                              className="settings-btn"
+                              onClick={() => void setAllModelsEnabled(discovered, false)}
+                            >
+                              Disable all
+                            </button>
+                          </div>
                           <input
-                            type="checkbox"
-                            checked={providerConfig.models[model.id]?.enabled === true}
+                            className="settings-input"
+                            type="search"
+                            placeholder={`Search ${discovered.models.length} models…`}
+                            value={modelSearch[providerId] ?? ''}
                             onChange={(event) =>
-                              void setModelEnabled(discovered, model.id, event.target.checked)
+                              setModelSearch((prev) => ({
+                                ...prev,
+                                [providerId]: event.target.value,
+                              }))
                             }
                           />
-                          <span title={model.id}>{modelLabel(model)}</span>
-                        </label>
-                      ))}
+                          <div className="settings-model-list">
+                            {visibleModels.map((model) => {
+                              const modelEnabled =
+                                providerConfig.models[model.id]?.enabled === true
+                              const currentEffort =
+                                providerConfig.models[model.id]?.reasoning_effort
+                              return (
+                                <div className="settings-model-row" key={model.id}>
+                                  <label className="settings-model-check">
+                                    <input
+                                      type="checkbox"
+                                      checked={modelEnabled}
+                                      onChange={(event) =>
+                                        void setModelEnabled(
+                                          discovered,
+                                          model.id,
+                                          event.target.checked,
+                                        )
+                                      }
+                                    />
+                                    <span title={model.id}>{modelLabel(model)}</span>
+                                  </label>
+                                  {modelEnabled ? (
+                                    <div className="settings-model-effort">
+                                      <label
+                                        className="settings-model-effort-label"
+                                        htmlFor={`effort-custom-${providerId}-${model.id}`}
+                                      >
+                                        Thinking
+                                      </label>
+                                      <select
+                                        id={`effort-custom-${providerId}-${model.id}`}
+                                        className="settings-select settings-effort-select"
+                                        value={currentEffort ?? ''}
+                                        onChange={(e) =>
+                                          void setModelReasoningEffort(
+                                            discovered,
+                                            model.id,
+                                            e.target.value as ReasoningEffortType | '',
+                                          )
+                                        }
+                                      >
+                                        <option value="">— default</option>
+                                        <option value="none">none</option>
+                                        <option value="low">low</option>
+                                        <option value="medium">medium</option>
+                                        <option value="high">high</option>
+                                      </select>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )
+                            })}
+                          </div>
+                          {status ? (
+                            <p
+                              className={`settings-hint${status.offline ? ' settings-offline' : ''}`}
+                            >
+                              {status.offline
+                                ? 'Offline — using cached models. '
+                                : `Discovered ${discovered.models.length} models. `}
+                              {status.error ?? ''}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="settings-hint">
+                          {providerConfig.enabled && connected
+                            ? 'No models discovered yet.'
+                            : 'Enable and configure this provider to discover models.'}
+                        </p>
+                      )}
                     </div>
-                    {status ? (
-                      <p className={`settings-hint${status.offline ? ' settings-offline' : ''}`}>
-                        {status.offline
-                          ? 'Offline — using cached models. '
-                          : `Discovered ${discovered.models.length} models. `}
-                        {status.error ?? ''}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <p className="settings-hint">
-                    {providerConfig.enabled && connected
-                      ? 'No models discovered yet.'
-                      : 'Enable and configure this provider to discover models.'}
-                  </p>
-                )}
-              </div>
-            )
-          })}
-      </section>
-
-      <section className="settings-section">
-        <h2>Default model</h2>
-        <div className="settings-field">
-          <label htmlFor="model-select">Model</label>
-          <select
-            id="model-select"
-            className="settings-select"
-            value={selectedModel}
-            disabled={savingModel}
-            onChange={(e) => void saveModel(e.target.value)}
-          >
-            <option value="">Select a model…</option>
-            {modelOptions.map(({ provider, models }) => (
-              <optgroup key={provider.id} label={provider.name}>
-                {models.map((model) => {
-                  const value = `${provider.id}/${model.id}`
-                  return (
-                    <option key={value} value={value}>
-                      {modelLabel(model)}
-                    </option>
                   )
                 })}
-              </optgroup>
-            ))}
-          </select>
-        </div>
+            </div>
 
-        <div className="settings-row">
-          <button
-            type="button"
-            className="settings-btn settings-btn-primary"
-            disabled={!selectedModel || testState === 'testing'}
-            onClick={() => void testModel()}
-          >
-            {testState === 'testing' ? 'Testing…' : 'Test model'}
-          </button>
-        </div>
+            <div className="settings-row">
+              <button
+                type="button"
+                className="settings-btn settings-btn-danger"
+                onClick={() => void clearAllKeys()}
+              >
+                Clear all keys
+              </button>
+            </div>
+          </section>
 
-        {modelOptions.length === 0 ? (
-          <p className="settings-hint">
-            Connect and enable a provider, discover its models, then enable at least one model.
-            Enabled models appear here and in the Chat model picker.
-          </p>
-        ) : null}
+          {/* ── Defaults ──────────────────────────────── */}
+          <section className="settings-section" id="defaults">
+            <div className="settings-section-heading">
+              <h2>Defaults</h2>
+              <p className="settings-section-desc">
+                The default model is used when no model is selected in the chat.
+              </p>
+            </div>
 
-        {testState !== 'idle' ? (
-          <div
-            className={`settings-status ${
-              testState === 'ok'
-                ? 'settings-status-ok'
-                : testState === 'error'
-                  ? 'settings-status-err'
-                  : 'settings-status-muted'
-            }`}
-          >
-            {testState === 'testing' ? 'Sending ping…' : testMessage}
-          </div>
-        ) : null}
-      </section>
+            <div className="settings-field">
+              <label htmlFor="model-select">Default model</label>
+              <select
+                id="model-select"
+                className="settings-select"
+                value={selectedModel}
+                disabled={savingModel}
+                onChange={(e) => void saveModel(e.target.value)}
+              >
+                <option value="">Select a model…</option>
+                {modelOptions.map(({ provider, models }) => (
+                  <optgroup key={provider.id} label={provider.name}>
+                    {models.map((model) => {
+                      const value = `${provider.id}/${model.id}`
+                      return (
+                        <option key={value} value={value}>
+                          {modelLabel(model)}
+                        </option>
+                      )
+                    })}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
 
-      <RemoteMcpSettings />
+            {config?.small_model !== undefined ? (
+              <div className="settings-field">
+                <label htmlFor="small-model-input">Small model</label>
+                <input
+                  id="small-model-input"
+                  className="settings-input"
+                  type="text"
+                  value={config.small_model ?? ''}
+                  placeholder="provider/model-id"
+                  readOnly
+                />
+                <p className="settings-hint">
+                  Used for lightweight tasks (titles, compaction). Set via config file.
+                </p>
+              </div>
+            ) : null}
 
-      <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
+            <div className="settings-row">
+              <button
+                type="button"
+                className="settings-btn settings-btn-primary"
+                disabled={!selectedModel || testState === 'testing'}
+                onClick={() => void testModel()}
+              >
+                {testState === 'testing' ? 'Testing…' : 'Test model'}
+              </button>
+            </div>
+
+            {modelOptions.length === 0 ? (
+              <p className="settings-hint">
+                Connect and enable a provider, discover its models, then enable at least one model.
+                Enabled models appear here and in the Chat model picker.
+              </p>
+            ) : null}
+
+            {testState !== 'idle' ? (
+              <div
+                className={`settings-status ${
+                  testState === 'ok'
+                    ? 'settings-status-ok'
+                    : testState === 'error'
+                      ? 'settings-status-err'
+                      : 'settings-status-muted'
+                }`}
+              >
+                {testState === 'testing' ? 'Sending ping…' : testMessage}
+              </div>
+            ) : null}
+          </section>
+
+          {/* ── Agent / Compaction ────────────────────── */}
+          <section className="settings-section" id="agent">
+            <div className="settings-section-heading">
+              <h2>Agent</h2>
+              <p className="settings-section-desc">
+                Context compaction controls how the agent summarises long conversations to stay
+                within the model's context window.
+              </p>
+            </div>
+
+            {compactionDraft ? (
+              <div className="settings-compaction">
+                <div className="settings-compaction-grid">
+                  <div className="settings-field">
+                    <label htmlFor="compaction-threshold">
+                      Threshold
+                      <span className="settings-field-note">
+                        {Math.round((compactionDraft.threshold ?? 0.72) * 100)}% — compact when
+                        this fraction of context is used (0.70–0.75)
+                      </span>
+                    </label>
+                    <input
+                      id="compaction-threshold"
+                      className="settings-input"
+                      type="number"
+                      min={0.70}
+                      max={0.75}
+                      step={0.01}
+                      value={compactionDraft.threshold}
+                      onChange={(e) =>
+                        setCompactionDraft((prev) =>
+                          prev ? { ...prev, threshold: parseFloat(e.target.value) } : prev,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label htmlFor="compaction-recent-turns">
+                      Recent turns
+                      <span className="settings-field-note">preserve last N turns verbatim</span>
+                    </label>
+                    <input
+                      id="compaction-recent-turns"
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={compactionDraft.recentTurns}
+                      onChange={(e) =>
+                        setCompactionDraft((prev) =>
+                          prev
+                            ? { ...prev, recentTurns: parseInt(e.target.value, 10) }
+                            : prev,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label htmlFor="compaction-reserve-tokens">
+                      Reserve tokens
+                      <span className="settings-field-note">tokens reserved for response</span>
+                    </label>
+                    <input
+                      id="compaction-reserve-tokens"
+                      className="settings-input"
+                      type="number"
+                      min={1024}
+                      step={256}
+                      value={compactionDraft.reserveTokens}
+                      onChange={(e) =>
+                        setCompactionDraft((prev) =>
+                          prev
+                            ? { ...prev, reserveTokens: parseInt(e.target.value, 10) }
+                            : prev,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label htmlFor="compaction-max-tool">
+                      Max tool result chars
+                      <span className="settings-field-note">truncate long tool outputs</span>
+                    </label>
+                    <input
+                      id="compaction-max-tool"
+                      className="settings-input"
+                      type="number"
+                      min={1000}
+                      step={1000}
+                      value={compactionDraft.maxToolResultChars}
+                      onChange={(e) =>
+                        setCompactionDraft((prev) =>
+                          prev
+                            ? { ...prev, maxToolResultChars: parseInt(e.target.value, 10) }
+                            : prev,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <label htmlFor="compaction-fallback-tokens">
+                      Fallback context tokens
+                      <span className="settings-field-note">
+                        assumed window when model has none reported
+                      </span>
+                    </label>
+                    <input
+                      id="compaction-fallback-tokens"
+                      className="settings-input"
+                      type="number"
+                      min={8192}
+                      step={4096}
+                      value={compactionDraft.fallbackContextTokens}
+                      onChange={(e) =>
+                        setCompactionDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                fallbackContextTokens: parseInt(e.target.value, 10),
+                              }
+                            : prev,
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="settings-row">
+                  <button
+                    type="button"
+                    className="settings-btn settings-btn-primary"
+                    disabled={savingCompaction}
+                    onClick={() => void saveCompaction()}
+                  >
+                    {savingCompaction ? 'Saving…' : 'Save compaction settings'}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-btn"
+                    onClick={() => config && setCompactionDraft(config.compaction)}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          {/* ── MCP ───────────────────────────────────── */}
+          <section className="settings-section" id="mcp">
+            <div className="settings-section-heading">
+              <h2>MCP</h2>
+              <p className="settings-section-desc">
+                Model Context Protocol servers extend the agent with external tools.
+              </p>
+            </div>
+            <RemoteMcpSettings />
+          </section>
+
+          {/* ── Permissions ───────────────────────────── */}
+          <section className="settings-section" id="permissions">
+            <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
+          </section>
+        </main>
+      </div>
     </div>
   )
 }
@@ -1332,12 +1762,14 @@ function SiteRulesSection({
   }
 
   return (
-    <section className="settings-section">
-      <h2>Site permission rules</h2>
-      <p className="settings-hint">
-        URL globs per tool. Sensitive paths (checkout / payment / login) are denied by default and
-        always win.
-      </p>
+    <>
+      <div className="settings-section-heading">
+        <h2>Permissions</h2>
+        <p className="settings-section-desc">
+          URL globs per tool. Sensitive paths (checkout / payment / login) are denied by default
+          and always win.
+        </p>
+      </div>
 
       <div className="settings-rules">
         {drafts.map((draft, index) => (
@@ -1447,6 +1879,6 @@ function SiteRulesSection({
           </span>
         </div>
       </div>
-    </section>
+    </>
   )
 }

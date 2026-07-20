@@ -11,6 +11,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         offscreen: 'src/offscreen/offscreen.html',
+        settings: 'src/settings/index.html',
       },
       preserveEntrySignatures: 'exports-only',
     },

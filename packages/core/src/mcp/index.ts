@@ -12,6 +12,8 @@ export {
   McpMarketplaceService,
   OFFICIAL_MCP_REGISTRY_URL,
 } from './marketplace.js'
+export { listMcpPresets, searchMcpPresets } from './presets.js'
+export type { McpServerPreset, McpServerPresetCategory } from './presets.js'
 export { mcpResultErrorMessage, normalizeMcpToolResult } from './result.js'
 export * from './messages.js'
 export * from './types.js'

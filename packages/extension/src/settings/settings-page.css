@@ -1,0 +1,83 @@
+.settings-page {
+  min-height: 100vh;
+  background: var(--gradient-atmo);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.settings-page-inner {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 0 24px 80px;
+}
+
+/* ── Brand hero header above settings content ── */
+.settings-page-inner::before {
+  content: 'Browser Agent';
+  display: block;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 5vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  padding: 48px 0 20px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  /* Gradient brand treatment */
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: var(--text);
+  animation: settings-hero-appear 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes settings-hero-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Suppress the redundant h1 in standalone settings page
+   — "Settings" is implied by context, "Browser Agent" is the headline */
+.settings-page .settings h1 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  /* Reset gradient treatment from Settings.css */
+  background: none;
+  -webkit-background-clip: initial;
+  -webkit-text-fill-color: initial;
+  background-clip: initial;
+  margin-bottom: 6px;
+}
+
+/* Promote lede in standalone page */
+.settings-page .settings-lede {
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+/* Lift provider cards in standalone settings */
+.settings-page .settings-provider {
+  background: color-mix(in srgb, var(--bg-elevated) 85%, transparent);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+  transition:
+    box-shadow var(--motion-fast) cubic-bezier(0.22, 1, 0.36, 1),
+    border-color var(--motion-fast) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.settings-page .settings-provider:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: var(--shadow-elevated);
+}

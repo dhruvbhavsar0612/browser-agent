@@ -35,10 +35,20 @@ export const PermissionConfig = z.union([
 ])
 export type PermissionConfig = z.infer<typeof PermissionConfig>
 
+/** Reasoning effort levels aligned with OpenAI's reasoning_effort parameter. */
+export const ReasoningEffort = z.enum(['none', 'low', 'medium', 'high'])
+export type ReasoningEffort = z.infer<typeof ReasoningEffort>
+
 export const ProviderModelConfig = z.object({
   name: z.string().optional(),
   tool_call: z.boolean().optional(),
   enabled: z.boolean().default(false),
+  /**
+   * Controls the model's reasoning/thinking effort when the model supports it
+   * (e.g. OpenAI o-series, Anthropic Claude with extended thinking).
+   * 'none' disables reasoning even if the model supports it by default.
+   */
+  reasoning_effort: ReasoningEffort.optional(),
 })
 export type ProviderModelConfig = z.infer<typeof ProviderModelConfig>
 

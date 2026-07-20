@@ -645,6 +645,151 @@
   white-space: nowrap;
 }
 
+/* ── DHR-90 search + presets UI ─────────────────── */
+.mcp-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mcp-search-row .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-add-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mcp-add-panel {
+  gap: 10px;
+}
+
+.mcp-setup-hint {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+
+.mcp-list-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-list-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+}
+
+.mcp-registry-loading {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.mcp-server-actions {
+  flex-wrap: wrap;
+}
+
+.mcp-expand-btn {
+  margin-left: auto;
+}
+
+.mcp-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.mcp-preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+}
+
+.mcp-preset-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mcp-preset-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.mcp-preset-category {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mcp-preset-desc {
+  flex: 1;
+  line-height: 1.45;
+}
+
+.mcp-preset-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.mcp-preset-auth {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.mcp-preset-add {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
 /* ── Responsive ─────────────────────────────────── */
 @media (max-width: 700px) {
   .settings {

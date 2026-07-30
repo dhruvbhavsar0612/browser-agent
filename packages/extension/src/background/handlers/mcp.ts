@@ -1,7 +1,9 @@
 import {
   McpCredentialSetPayload,
+  McpClientError,
   McpMarketplaceImportPayload,
   McpMarketplaceSearchPayload,
+  McpOAuthCancelPayload,
   McpOAuthCompletePayload,
   McpResourceReadPayload,
   McpServerCreatePayload,
@@ -12,6 +14,7 @@ import {
   type ConfigService,
   type CredentialVault,
   type Envelope,
+  type McpHealthError,
   type McpMarketplaceService,
   type RemoteMcpRegistry,
 } from '@browser-agent/core'
@@ -19,19 +22,28 @@ import type { MessageBus } from '../bus.js'
 
 const MCP_OAUTH_PENDING_KEY = 'browser-agent.mcp-oauth-pending'
 const MCP_OAUTH_CONNECT_TIMEOUT_MS = 5 * 60 * 1000
-const MCP_OAUTH_SAFE_ERROR =
-  'MCP OAuth could not be completed. Restart Connect and complete the callback before it expires.'
+const MCP_OAUTH_SAFE_ERROR: McpHealthError = {
+  code: 'auth',
+  message: 'MCP OAuth could not be completed.',
+  action: 'Restart authorization. Do not paste provider error pages or unregistered callback URLs.',
+}
 
 type McpOAuthPending = {
   serverId: string
   redirectUrl: string
+  generation: string
+  manual: boolean
   tabId?: number
   createdAt: number
 }
 
 type McpOAuthPendingMap = Record<string, McpOAuthPending>
 
-const activeMcpOAuthListeners = new Map<string, () => void>()
+const activeMcpOAuthListeners = new Map<
+  string,
+  { generation: string; cleanup: () => void }
+>()
+const mcpOAuthOperations = new Map<string, Promise<unknown>>()
 
 export interface McpHandlerDeps {
   config: ConfigService
@@ -42,6 +54,11 @@ export interface McpHandlerDeps {
 
 function oauthRedirectUrl(): string {
   return chrome.identity.getRedirectURL('mcp')
+}
+
+async function configuredOAuthRedirectUrl(id: string, config: ConfigService): Promise<string> {
+  const server = (await config.get()).mcp[id]
+  return server?.auth.oauth?.redirectUrl ?? oauthRedirectUrl()
 }
 
 function hasMcpOAuthBrowserApis(): boolean {
@@ -66,24 +83,59 @@ async function writeMcpOAuthPending(pending: McpOAuthPendingMap): Promise<void> 
 }
 
 async function clearMcpOAuthPending(serverId: string): Promise<void> {
-  activeMcpOAuthListeners.get(serverId)?.()
-  activeMcpOAuthListeners.delete(serverId)
+  activeMcpOAuthListeners.get(serverId)?.cleanup()
   const pending = await readMcpOAuthPending()
   delete pending[serverId]
   await writeMcpOAuthPending(pending)
 }
 
-async function cancelMcpOAuthPending(serverId: string, registry: RemoteMcpRegistry): Promise<void> {
-  await Promise.all([
-    clearMcpOAuthPending(serverId),
-    registry.cancelOAuth(serverId).catch(() => {
-      // The pending record is still consumed when a server was removed or is unavailable.
-    }),
-  ])
+async function clearCurrentMcpOAuthPending(
+  serverId: string,
+  generation?: string,
+): Promise<boolean> {
+  const active = activeMcpOAuthListeners.get(serverId)
+  if (!generation || active?.generation === generation) active?.cleanup()
+  const pending = await readMcpOAuthPending()
+  if (generation && pending[serverId]?.generation !== generation) return false
+  const existed = Boolean(pending[serverId])
+  delete pending[serverId]
+  await writeMcpOAuthPending(pending)
+  return existed
 }
 
-function safeMcpOAuthError(): Error {
-  return new Error(MCP_OAUTH_SAFE_ERROR)
+async function cancelMcpOAuthPending(
+  serverId: string,
+  registry: RemoteMcpRegistry,
+  generation?: string,
+  redirectUrl?: string,
+): Promise<boolean> {
+  if (generation && !(await clearCurrentMcpOAuthPending(serverId, generation))) return false
+  if (!generation) await clearMcpOAuthPending(serverId)
+  const cancelled = await registry.cancelOAuth(serverId, redirectUrl, generation).catch(() => false)
+  return cancelled !== false
+}
+
+function serializeMcpOAuth<T>(serverId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = mcpOAuthOperations.get(serverId) ?? Promise.resolve()
+  const current = previous.catch(() => undefined).then(operation)
+  mcpOAuthOperations.set(serverId, current)
+  void current.finally(() => {
+    if (mcpOAuthOperations.get(serverId) === current) {
+      mcpOAuthOperations.delete(serverId)
+    }
+  }).catch(() => undefined)
+  return current
+}
+
+function oauthFailure(error: unknown): McpHealthError {
+  if (error instanceof McpClientError) {
+    return {
+      code: error.code,
+      message: error.message,
+      action: error.action ?? MCP_OAUTH_SAFE_ERROR.action,
+    }
+  }
+  return MCP_OAUTH_SAFE_ERROR
 }
 
 function isMcpOAuthCallback(callbackUrl: string, redirectUrl: string): boolean {
@@ -101,30 +153,51 @@ async function completeMcpOAuthCallback(
   callbackUrl: string,
   registry: RemoteMcpRegistry,
 ): Promise<void> {
-  try {
-    await registry.completeOAuth(pending.serverId, callbackUrl, pending.redirectUrl)
-    await clearMcpOAuthPending(pending.serverId)
-    if (pending.tabId != null) {
-      try {
-        await chrome.tabs.remove(pending.tabId)
-      } catch {
-        // The authorization tab may already be closed.
+  await serializeMcpOAuth(pending.serverId, async () => {
+    const current = (await readMcpOAuthPending())[pending.serverId]
+    if (!current || current.generation !== pending.generation) return
+    try {
+      await registry.completeOAuth(
+        pending.serverId,
+        callbackUrl,
+        pending.redirectUrl,
+        pending.generation,
+      )
+      await clearCurrentMcpOAuthPending(pending.serverId, pending.generation)
+      if (pending.tabId != null) {
+        try {
+          await chrome.tabs.remove(pending.tabId)
+        } catch {
+          // The authorization tab may already be closed.
+        }
       }
+    } catch {
+      // The callback URL can contain an authorization code, so do not log it or
+      // the thrown error. A fresh Connect attempt can safely restart the flow.
+      await cancelMcpOAuthPending(
+        pending.serverId,
+        registry,
+        pending.generation,
+        pending.redirectUrl,
+      )
+      console.warn('[browser-agent] MCP OAuth callback exchange failed')
     }
-  } catch {
-    // The callback URL can contain an authorization code, so do not log it or
-    // the thrown error. A fresh Connect attempt can safely restart the flow.
-    await cancelMcpOAuthPending(pending.serverId, registry)
-    console.warn('[browser-agent] MCP OAuth callback exchange failed')
-  }
+  })
 }
 
 function watchMcpOAuthCallback(pending: McpOAuthPending, registry: RemoteMcpRegistry): void {
   if (pending.tabId == null || !hasMcpOAuthBrowserApis()) return
-  activeMcpOAuthListeners.get(pending.serverId)?.()
+  activeMcpOAuthListeners.get(pending.serverId)?.cleanup()
 
   const timer = setTimeout(() => {
-    void cancelMcpOAuthPending(pending.serverId, registry)
+    void serializeMcpOAuth(pending.serverId, () =>
+      cancelMcpOAuthPending(
+        pending.serverId,
+        registry,
+        pending.generation,
+        pending.redirectUrl,
+      ),
+    )
   }, MCP_OAUTH_CONNECT_TIMEOUT_MS)
 
   const onUpdated = (
@@ -141,17 +214,26 @@ function watchMcpOAuthCallback(pending: McpOAuthPending, registry: RemoteMcpRegi
 
   const onRemoved = (tabId: number) => {
     if (tabId !== pending.tabId) return
-    void cancelMcpOAuthPending(pending.serverId, registry)
+    void serializeMcpOAuth(pending.serverId, () =>
+      cancelMcpOAuthPending(
+        pending.serverId,
+        registry,
+        pending.generation,
+        pending.redirectUrl,
+      ),
+    )
   }
 
   function cleanup() {
     clearTimeout(timer)
     chrome.tabs.onUpdated.removeListener(onUpdated)
     chrome.tabs.onRemoved.removeListener(onRemoved)
-    activeMcpOAuthListeners.delete(pending.serverId)
+    if (activeMcpOAuthListeners.get(pending.serverId)?.generation === pending.generation) {
+      activeMcpOAuthListeners.delete(pending.serverId)
+    }
   }
 
-  activeMcpOAuthListeners.set(pending.serverId, cleanup)
+  activeMcpOAuthListeners.set(pending.serverId, { generation: pending.generation, cleanup })
   chrome.tabs.onUpdated.addListener(onUpdated)
   chrome.tabs.onRemoved.addListener(onRemoved)
 }
@@ -160,8 +242,18 @@ async function restoreMcpOAuthCallbacks(registry: RemoteMcpRegistry): Promise<vo
   const pendingMap = await readMcpOAuthPending()
   await Promise.all(
     Object.values(pendingMap).map(async (pending) => {
-      if (Date.now() - pending.createdAt > MCP_OAUTH_CONNECT_TIMEOUT_MS) {
-        await cancelMcpOAuthPending(pending.serverId, registry)
+      if (
+        !pending.generation ||
+        Date.now() - pending.createdAt > MCP_OAUTH_CONNECT_TIMEOUT_MS
+      ) {
+        await serializeMcpOAuth(pending.serverId, () =>
+          cancelMcpOAuthPending(
+            pending.serverId,
+            registry,
+            pending.generation || undefined,
+            pending.redirectUrl,
+          ),
+        )
         return
       }
       watchMcpOAuthCallback(pending, registry)
@@ -214,10 +306,14 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
         servers: config.mcp,
         discoveries,
         credentials,
-        oauthPending: Object.values(oauthPending).map(({ serverId, createdAt }) => ({
+        oauthPending: Object.values(oauthPending).map(
+          ({ serverId, createdAt, generation, manual }) => ({
           serverId,
           createdAt,
-        })),
+            generation,
+            manual,
+          }),
+        ),
       })
     })
     .on('mcp.server.create', async (message) => {
@@ -243,7 +339,7 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
     })
     .on('mcp.server.delete', async (message) => {
       const { id } = McpServerIdPayload.parse(message.payload)
-      await cancelMcpOAuthPending(id, deps.registry)
+      await serializeMcpOAuth(id, () => cancelMcpOAuthPending(id, deps.registry))
       await Promise.all([
         deps.registry.close(id),
         deps.registry.clearCachedDiscovery(id),
@@ -296,80 +392,191 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
     })
     .on('mcp.oauth.connect', async (message) => {
       const { id } = McpServerIdPayload.parse(message.payload)
-      const redirectUrl = oauthRedirectUrl()
-      let pending: { authorizationUrl: string; state: string }
-      try {
-        pending = await deps.registry.beginOAuth(id, redirectUrl)
-      } catch {
-        await cancelMcpOAuthPending(id, deps.registry)
-        throw safeMcpOAuthError()
+      const started = await serializeMcpOAuth(id, async () => {
+        try {
+          await cancelMcpOAuthPending(id, deps.registry)
+          const attempt = await deps.registry.beginOAuth(
+            id,
+            await configuredOAuthRedirectUrl(id, deps.config),
+          )
+          const pending: McpOAuthPending = {
+            serverId: id,
+            redirectUrl: attempt.redirectUrl,
+            generation: attempt.generation,
+            manual: false,
+            createdAt: Date.now(),
+          }
+          const pendingMap = await readMcpOAuthPending()
+          pendingMap[id] = pending
+          await writeMcpOAuthPending(pendingMap)
+          return { pending, attempt }
+        } catch (error) {
+          await cancelMcpOAuthPending(id, deps.registry)
+          return { error: oauthFailure(error) }
+        }
+      })
+      if ('error' in started) {
+        return createResponse(message, 'mcp.oauth.connect', { ok: false, error: started.error })
       }
+
       let callbackUrl: string | null
+      let captureFailed = false
       try {
-        callbackUrl = await tryIdentityFlow(pending.authorizationUrl, redirectUrl)
+        callbackUrl = await tryIdentityFlow(started.attempt.authorizationUrl, started.pending.redirectUrl)
       } catch {
-        // Fall through to the tab callback watcher. This is intentionally the
-        // same resilient path used by provider OAuth for fixed redirects.
+        // The provider already issued an authorization URL. A tab watcher can
+        // capture a redirect that was validly registered but not captured by
+        // chrome.identity.
+        captureFailed = true
         callbackUrl = null
       }
       if (callbackUrl) {
-        try {
-          const health = await deps.registry.completeOAuth(id, callbackUrl, redirectUrl)
-          await clearMcpOAuthPending(id)
-          return createResponse(message, 'mcp.oauth.connect', { ok: health.ok, health })
-        } catch {
-          await cancelMcpOAuthPending(id, deps.registry)
-          throw safeMcpOAuthError()
-        }
+        const completed = await serializeMcpOAuth(id, async () => {
+          const current = (await readMcpOAuthPending())[id]
+          if (!current || current.generation !== started.pending.generation) {
+            return {
+              ok: false,
+              error: {
+                code: 'auth' as const,
+                message: 'This OAuth attempt is no longer current.',
+                action: 'Use the newest authorization attempt instead.',
+              },
+            }
+          }
+          try {
+            const health = await deps.registry.completeOAuth(
+              id,
+              callbackUrl!,
+              current.redirectUrl,
+              current.generation,
+            )
+            await clearCurrentMcpOAuthPending(id, current.generation)
+            return { ok: health.ok, health }
+          } catch (error) {
+            await cancelMcpOAuthPending(id, deps.registry, current.generation, current.redirectUrl)
+            return { ok: false, error: oauthFailure(error) }
+          }
+        })
+        return createResponse(message, 'mcp.oauth.connect', completed)
       }
 
-      if (!hasMcpOAuthBrowserApis()) {
-        await cancelMcpOAuthPending(id, deps.registry)
-        throw safeMcpOAuthError()
+      if (!started.attempt.usesConfiguredClient && !captureFailed) {
+        const error: McpHealthError = {
+          code: 'oauth-redirect',
+          message: 'Chrome could not capture this provider’s OAuth callback.',
+          action:
+            'Use the provider’s supported token auth (GitHub: a fine-grained PAT saved as Bearer), or configure a provider-registered public OAuth client ID and HTTPS/localhost redirect URI. Pasting a rejected Chrome callback cannot bypass provider registration.',
+        }
+        await serializeMcpOAuth(id, () =>
+          cancelMcpOAuthPending(
+            id,
+            deps.registry,
+            started.pending.generation,
+            started.pending.redirectUrl,
+          ),
+        )
+        return createResponse(message, 'mcp.oauth.connect', { ok: false, error })
       }
-      let tab: chrome.tabs.Tab
-      try {
-        tab = await chrome.tabs.create({ url: pending.authorizationUrl, active: true })
-      } catch {
-        await cancelMcpOAuthPending(id, deps.registry)
-        throw safeMcpOAuthError()
-      }
-      const fallbackPending: McpOAuthPending = {
-        serverId: id,
-        redirectUrl,
-        tabId: tab.id,
-        createdAt: Date.now(),
-      }
-      const pendingMap = await readMcpOAuthPending()
-      pendingMap[id] = fallbackPending
-      await writeMcpOAuthPending(pendingMap)
-      watchMcpOAuthCallback(fallbackPending, deps.registry)
-      return createResponse(message, 'mcp.oauth.connect', {
-        ok: true,
-        pending: true,
-        manual: true,
+
+      const fallback = await serializeMcpOAuth(id, async () => {
+        const current = (await readMcpOAuthPending())[id]
+        if (!current || current.generation !== started.pending.generation) {
+          return {
+            ok: false,
+            error: {
+              code: 'auth' as const,
+              message: 'This OAuth attempt is no longer current.',
+              action: 'Use the newest authorization attempt instead.',
+            },
+          }
+        }
+        if (!hasMcpOAuthBrowserApis()) {
+          await cancelMcpOAuthPending(id, deps.registry, current.generation, current.redirectUrl)
+          return { ok: false, error: MCP_OAUTH_SAFE_ERROR }
+        }
+        try {
+          const tab = await chrome.tabs.create({
+            url: started.attempt.authorizationUrl,
+            active: true,
+          })
+          const pending = { ...current, tabId: tab.id, manual: true }
+          const pendingMap = await readMcpOAuthPending()
+          if (pendingMap[id]?.generation !== pending.generation) {
+            return {
+              ok: false,
+              error: {
+                code: 'auth' as const,
+                message: 'This OAuth attempt is no longer current.',
+                action: 'Use the newest authorization attempt instead.',
+              },
+            }
+          }
+          pendingMap[id] = pending
+          await writeMcpOAuthPending(pendingMap)
+          watchMcpOAuthCallback(pending, deps.registry)
+          return { ok: true, pending: true, manual: true, generation: pending.generation }
+        } catch (error) {
+          await cancelMcpOAuthPending(id, deps.registry, current.generation, current.redirectUrl)
+          return { ok: false, error: oauthFailure(error) }
+        }
       })
+      return createResponse(message, 'mcp.oauth.connect', fallback)
     })
     .on('mcp.oauth.complete', async (message) => {
-      const { id, callbackUrl } = McpOAuthCompletePayload.parse(message.payload)
-      try {
-        const health = await deps.registry.completeOAuth(id, callbackUrl, oauthRedirectUrl())
-        await clearMcpOAuthPending(id)
-        return createResponse(message, 'mcp.oauth.complete', { ok: health.ok, health })
-      } catch {
-        await cancelMcpOAuthPending(id, deps.registry)
-        throw safeMcpOAuthError()
-      }
+      const { id, callbackUrl, generation } = McpOAuthCompletePayload.parse(message.payload)
+      const completed = await serializeMcpOAuth(id, async () => {
+        const pending = (await readMcpOAuthPending())[id]
+        if (!pending || pending.generation !== generation) {
+          return {
+            ok: false,
+            error: {
+              code: 'auth' as const,
+              message: 'This OAuth attempt is no longer current.',
+              action: 'Use the newest authorization attempt instead.',
+            },
+          }
+        }
+        try {
+          const health = await deps.registry.completeOAuth(
+            id,
+            callbackUrl,
+            pending.redirectUrl,
+            generation,
+          )
+          await clearCurrentMcpOAuthPending(id, generation)
+          return { ok: health.ok, health }
+        } catch (error) {
+          await cancelMcpOAuthPending(id, deps.registry, generation, pending.redirectUrl)
+          return { ok: false, error: oauthFailure(error) }
+        }
+      })
+      return createResponse(message, 'mcp.oauth.complete', completed)
     })
     .on('mcp.oauth.cancel', async (message) => {
-      const { id } = McpServerIdPayload.parse(message.payload)
-      await cancelMcpOAuthPending(id, deps.registry)
-      return createResponse(message, 'mcp.oauth.cancel', { ok: true, id })
+      const { id, generation } = McpOAuthCancelPayload.parse(message.payload)
+      const cancelled = await serializeMcpOAuth(id, async () => {
+        const pending = (await readMcpOAuthPending())[id]
+        if (!pending || pending.generation !== generation) {
+          return {
+            ok: false,
+            error: {
+              code: 'auth' as const,
+              message: 'This OAuth attempt is no longer current.',
+              action: 'Use the newest authorization attempt instead.',
+            },
+          }
+        }
+        await cancelMcpOAuthPending(id, deps.registry, generation, pending.redirectUrl)
+        return { ok: true, id }
+      })
+      return createResponse(message, 'mcp.oauth.cancel', cancelled)
     })
     .on('mcp.oauth.disconnect', async (message) => {
       const { id } = McpServerIdPayload.parse(message.payload)
-      await cancelMcpOAuthPending(id, deps.registry)
-      await deps.registry.disconnectOAuth(id)
+      await serializeMcpOAuth(id, async () => {
+        await cancelMcpOAuthPending(id, deps.registry)
+        await deps.registry.disconnectOAuth(id)
+      })
       return createResponse(message, 'mcp.oauth.disconnect', { ok: true, id })
     })
     .on('mcp.resources.list', async (message) => {

@@ -192,6 +192,28 @@ function shouldFallBackToSse(error: unknown): boolean {
   return [404, 405, 406, 415, 501].includes(error.code ?? -1)
 }
 
+function isOAuthRedirectConstraint(error: unknown): boolean {
+  const detail = formatError(error).toLowerCase()
+  return (
+    detail.includes('redirect_uri') ||
+    detail.includes('redirect uri') ||
+    detail.includes('redirect-url') ||
+    detail.includes('redirect url') ||
+    detail.includes('invalid_redirect') ||
+    detail.includes('client registration') ||
+    detail.includes('dynamic registration')
+  )
+}
+
+function oauthRedirectConstraint(error: unknown): McpClientError {
+  return new McpClientError(
+    'This provider does not accept Browser Agent’s dynamic OAuth client or Chrome extension callback.',
+    'oauth-redirect',
+    error,
+    'Use the provider’s supported token auth (GitHub: a fine-grained PAT saved as Bearer), or configure a provider-registered public OAuth client ID and HTTPS/localhost redirect URI. Browser Agent cannot bypass provider callback registration or host a callback.',
+  )
+}
+
 function configFingerprint(server: McpServerConfig): string {
   return JSON.stringify({
     url: server.url,
@@ -436,20 +458,35 @@ export class RemoteMcpRegistry {
   async beginOAuth(
     serverId: string,
     redirectUrl = this.resolveRedirectUrl(),
-  ): Promise<{ authorizationUrl: string; state: string }> {
+    generation = crypto.randomUUID(),
+  ): Promise<{
+    authorizationUrl: string
+    state: string
+    redirectUrl: string
+    generation: string
+    usesConfiguredClient: boolean
+  }> {
     const server = await this.requireServer(serverId)
     if (server.auth.mode !== 'oauth') {
       throw new McpClientError('Set this MCP server auth mode to OAuth first', 'configuration')
     }
+    const effectiveRedirectUrl = server.auth.oauth?.redirectUrl ?? redirectUrl
     let authorizationUrl: URL | undefined
-    const provider = this.createOAuthProvider(serverId, redirectUrl, (url) => {
+    const provider = this.createOAuthProvider(serverId, effectiveRedirectUrl, server, (url) => {
       authorizationUrl = url
     })
-    await provider.beginAuthorization()
-    const result = await auth(provider, {
-      serverUrl: server.url,
-      fetchFn: this.fetchWithHeaders(server.headers),
-    })
+    await provider.beginAuthorization(generation)
+    let result: 'AUTHORIZED' | 'REDIRECT'
+    try {
+      result = await auth(provider, {
+        serverUrl: server.url,
+        fetchFn: this.fetchWithHeaders(server.headers),
+      })
+    } catch (error) {
+      await provider.clearPendingAuthorization(generation)
+      if (!server.auth.oauth && isOAuthRedirectConstraint(error)) throw oauthRedirectConstraint(error)
+      throw error
+    }
     if (result !== 'REDIRECT' || !authorizationUrl) {
       if (result === 'AUTHORIZED') {
         throw new McpClientError('This MCP server is already authorized', 'auth')
@@ -459,6 +496,9 @@ export class RemoteMcpRegistry {
     return {
       authorizationUrl: authorizationUrl.toString(),
       state: (await provider.expectedState()) ?? '',
+      redirectUrl: effectiveRedirectUrl,
+      generation,
+      usesConfiguredClient: Boolean(server.auth.oauth),
     }
   }
 
@@ -466,13 +506,19 @@ export class RemoteMcpRegistry {
     serverId: string,
     callbackUrl: string,
     redirectUrl = this.resolveRedirectUrl(),
+    generation: string,
   ): Promise<McpHealth> {
     const server = await this.requireServer(serverId)
-    const provider = this.createOAuthProvider(serverId, redirectUrl)
-    await provider.consumePendingAuthorization(callbackUrl)
+    const effectiveRedirectUrl = server.auth.oauth?.redirectUrl ?? redirectUrl
+    const provider = this.createOAuthProvider(serverId, effectiveRedirectUrl, server)
+    await provider.consumePendingAuthorization(callbackUrl, generation)
     const callback = new URL(callbackUrl)
     try {
       if (callback.searchParams.get('error')) {
+        const description = callback.searchParams.get('error_description') ?? ''
+        if (!server.auth.oauth && isOAuthRedirectConstraint(description)) {
+          throw oauthRedirectConstraint(new Error(description))
+        }
         throw new McpClientError(
           'MCP OAuth authorization was denied or cancelled; restart authorization.',
           'auth',
@@ -491,16 +537,24 @@ export class RemoteMcpRegistry {
         throw new McpClientError('MCP OAuth token exchange did not complete', 'auth')
       }
     } finally {
-      await provider.clearPendingAuthorization()
+      await provider.clearPendingAuthorization(generation)
     }
     await this.close(serverId)
     return this.testConnection(serverId)
   }
 
-  async cancelOAuth(serverId: string, redirectUrl = this.resolveRedirectUrl()): Promise<void> {
-    await this.requireServer(serverId)
+  async cancelOAuth(
+    serverId: string,
+    redirectUrl = this.resolveRedirectUrl(),
+    generation?: string,
+  ): Promise<boolean> {
+    const server = await this.requireServer(serverId)
     await this.close(serverId)
-    await this.createOAuthProvider(serverId, redirectUrl).clearPendingAuthorization()
+    return this.createOAuthProvider(
+      serverId,
+      server.auth.oauth?.redirectUrl ?? redirectUrl,
+      server,
+    ).clearPendingAuthorization(generation)
   }
 
   async disconnectOAuth(serverId: string): Promise<void> {
@@ -546,7 +600,11 @@ export class RemoteMcpRegistry {
 
     const authProvider =
       server.auth.mode === 'oauth'
-        ? this.createOAuthProvider(serverId, this.resolveRedirectUrl())
+        ? this.createOAuthProvider(
+            serverId,
+            server.auth.oauth?.redirectUrl ?? this.resolveRedirectUrl(),
+            server,
+          )
         : undefined
     const headers = await this.resolveHeaders(serverId, server)
     const order: McpTransportKind[] =
@@ -735,11 +793,13 @@ export class RemoteMcpRegistry {
   private createOAuthProvider(
     serverId: string,
     redirectUrl: string,
+    server?: McpServerConfig,
     onRedirect?: (url: URL) => void | Promise<void>,
   ): McpOAuthClientProvider {
     return new McpOAuthClientProvider(serverId, this.vault, redirectUrl, onRedirect, {
       now: this.now,
       pendingTtlMs: this.options.oauthPendingTtlMs ?? MCP_OAUTH_PENDING_TTL_MS,
+      clientId: server?.auth.oauth?.clientId,
     })
   }
 }

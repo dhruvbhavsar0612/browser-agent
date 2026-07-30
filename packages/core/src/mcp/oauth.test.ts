@@ -87,6 +87,8 @@ describe('MCP OAuth 2.1', () => {
     const health = await registry.completeOAuth(
       'oauth',
       `https://extension.chromiumapp.org/mcp?code=test-code&state=${pending.state}`,
+      undefined,
+      pending.generation,
     )
     expect(health.ok).toBe(true)
     expect(tokenBodies).toHaveLength(1)
@@ -95,6 +97,7 @@ describe('MCP OAuth 2.1', () => {
     expect(tokenBodies[0]!.get('resource')).toBe('https://mcp.example/mcp')
     expect((await vault.getMcp('oauth', 'oauth'))?.secret).not.toContain('"state"')
     expect((await vault.getMcp('oauth', 'oauth'))?.secret).not.toContain('"codeVerifier"')
+    expect((await vault.getMcp('oauth', 'oauth'))?.secret).not.toContain('"pendingGeneration"')
 
     const encrypted = await storage.getLocal<unknown>(VAULT_LOCAL_KEY)
     expect(JSON.stringify(encrypted)).not.toContain('access-secret')
@@ -120,6 +123,7 @@ describe('MCP OAuth 2.1', () => {
       JSON.stringify({
         state: 'expected',
         codeVerifier: 'verifier',
+        pendingGeneration: 'expected-generation',
         pendingCreatedAt: Date.now(),
         pendingRedirectUrl: 'https://extension.chromiumapp.org/mcp',
       }),
@@ -134,9 +138,132 @@ describe('MCP OAuth 2.1', () => {
       registry.completeOAuth(
         'oauth',
         'https://extension.chromiumapp.org/mcp?code=test&state=attacker',
+        undefined,
+        'expected-generation',
       ),
     ).rejects.toThrow(/state mismatch/)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('uses a provider-registered public client and redirect without dynamic registration', async () => {
+    const storage = createMemoryStorage()
+    const config = new ConfigService(storage)
+    const vault = new CredentialVault(storage)
+    await config.set({
+      mcp: {
+        oauth: {
+          url: 'https://mcp.example/mcp',
+          auth: {
+            mode: 'oauth',
+            oauth: {
+              clientId: 'public-client-id',
+              redirectUrl: 'https://app.example/oauth/callback',
+            },
+          },
+        },
+      },
+    })
+    const tokenBodies: URLSearchParams[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.includes('oauth-protected-resource')) {
+        return Response.json({
+          resource: 'https://mcp.example/mcp',
+          authorization_servers: ['https://auth.example'],
+        })
+      }
+      if (url.hostname === 'auth.example' && url.pathname.includes('.well-known')) {
+        return Response.json({
+          issuer: 'https://auth.example',
+          authorization_endpoint: 'https://auth.example/authorize',
+          token_endpoint: 'https://auth.example/token',
+          response_types_supported: ['code'],
+          grant_types_supported: ['authorization_code'],
+          code_challenge_methods_supported: ['S256'],
+          token_endpoint_auth_methods_supported: ['none'],
+        })
+      }
+      if (url.href === 'https://auth.example/token') {
+        tokenBodies.push(new URLSearchParams(String(init?.body ?? '')))
+        return Response.json({
+          access_token: 'test-access',
+          refresh_token: 'test-refresh',
+          token_type: 'Bearer',
+        })
+      }
+      throw new Error(`Dynamic registration must not run: ${url}`)
+    })
+    const registry = new RemoteMcpRegistry(config, vault, storage, {
+      fetch: fetchMock as typeof fetch,
+      connectionFactory: async () => ({
+        client: {
+          ping: vi.fn().mockResolvedValue({}),
+          getServerVersion: () => ({ name: 'oauth-server', version: '1.0.0' }),
+        } as unknown as Client,
+        transport: { close: vi.fn() } as unknown as Transport,
+      }),
+    })
+
+    const pending = await registry.beginOAuth('oauth', undefined, 'public-generation')
+    const authorization = new URL(pending.authorizationUrl)
+    expect(pending.redirectUrl).toBe('https://app.example/oauth/callback')
+    expect(pending.usesConfiguredClient).toBe(true)
+    expect(authorization.searchParams.get('client_id')).toBe('public-client-id')
+    expect(authorization.searchParams.get('redirect_uri')).toBe('https://app.example/oauth/callback')
+
+    await registry.completeOAuth(
+      'oauth',
+      `https://app.example/oauth/callback?code=test-code&state=${pending.state}`,
+      undefined,
+      pending.generation,
+    )
+    expect(tokenBodies[0]?.get('client_id')).toBe('public-client-id')
+    await registry.closeAll()
+  })
+
+  it('classifies a rejected dynamic redirect as an actionable platform constraint', async () => {
+    const storage = createMemoryStorage()
+    const config = new ConfigService(storage)
+    const vault = new CredentialVault(storage)
+    await config.set({
+      mcp: { oauth: { url: 'https://mcp.example/mcp', auth: { mode: 'oauth' } } },
+    })
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname.includes('oauth-protected-resource')) {
+        return Response.json({
+          resource: 'https://mcp.example/mcp',
+          authorization_servers: ['https://auth.example'],
+        })
+      }
+      if (url.hostname === 'auth.example' && url.pathname.includes('.well-known')) {
+        return Response.json({
+          issuer: 'https://auth.example',
+          authorization_endpoint: 'https://auth.example/authorize',
+          token_endpoint: 'https://auth.example/token',
+          registration_endpoint: 'https://auth.example/register',
+          response_types_supported: ['code'],
+          grant_types_supported: ['authorization_code'],
+          token_endpoint_auth_methods_supported: ['none'],
+        })
+      }
+      if (url.href === 'https://auth.example/register') {
+        return Response.json(
+          { error: 'invalid_redirect_uri', error_description: 'redirect URI is not allowed' },
+          { status: 400 },
+        )
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const registry = new RemoteMcpRegistry(config, vault, storage, {
+      fetch: fetchMock as typeof fetch,
+      oauthRedirectUrl: 'https://extension.chromiumapp.org/mcp',
+    })
+
+    await expect(registry.beginOAuth('oauth')).rejects.toMatchObject({
+      code: 'oauth-redirect',
+      action: expect.stringContaining('fine-grained PAT'),
+    })
   })
 
   it('consumes OAuth state and PKCE once, and rejects expired or mismatched callbacks', async () => {
@@ -153,52 +280,76 @@ describe('MCP OAuth 2.1', () => {
       )
 
     const mismatch = createProvider()
-    await mismatch.beginAuthorization()
+    await mismatch.beginAuthorization('mismatch-generation')
     const mismatchState = await mismatch.state()
     await mismatch.saveCodeVerifier('mismatch-verifier')
     await expect(
       mismatch.consumePendingAuthorization(
         'https://extension.chromiumapp.org/mcp?code=unused&state=wrong-state',
+        'mismatch-generation',
       ),
     ).rejects.toThrow(/state mismatch/)
     expect(await mismatch.expectedState()).toBeUndefined()
 
     const expired = createProvider()
-    await expired.beginAuthorization()
+    await expired.beginAuthorization('expired-generation')
     const expiredState = await expired.state()
     await expired.saveCodeVerifier('expired-verifier')
     now += MCP_OAUTH_PENDING_TTL_MS + 1
     await expect(
       expired.consumePendingAuthorization(
         `https://extension.chromiumapp.org/mcp?code=unused&state=${expiredState}`,
+        'expired-generation',
       ),
     ).rejects.toThrow(/expired/)
     expect(await expired.expectedState()).toBeUndefined()
 
     now = 10_000
     const replay = createProvider()
-    await replay.beginAuthorization()
+    await replay.beginAuthorization('replay-generation')
     const replayState = await replay.state()
     await replay.saveCodeVerifier('one-time-verifier')
     const callback = `https://extension.chromiumapp.org/mcp?code=unused&state=${replayState}`
-    await replay.consumePendingAuthorization(callback)
+    await replay.consumePendingAuthorization(callback, 'replay-generation')
     expect(await replay.codeVerifier()).toBe('one-time-verifier')
     expect(await replay.expectedState()).toBeUndefined()
-    await expect(replay.consumePendingAuthorization(callback)).rejects.toThrow(/expired/)
+    await expect(replay.consumePendingAuthorization(callback, 'replay-generation')).rejects.toThrow(
+      /no longer current/,
+    )
 
     const wrongRedirect = createProvider()
-    await wrongRedirect.beginAuthorization()
+    await wrongRedirect.beginAuthorization('redirect-generation')
     const redirectState = await wrongRedirect.state()
     await wrongRedirect.saveCodeVerifier('redirect-verifier')
     await expect(
       wrongRedirect.consumePendingAuthorization(
         `https://other.example/callback?code=unused&state=${redirectState}`,
+        'redirect-generation',
       ),
     ).rejects.toThrow(/redirect URI/)
     expect(await wrongRedirect.expectedState()).toBeUndefined()
 
+    const superseded = createProvider()
+    await superseded.beginAuthorization('first-generation')
+    const firstState = await superseded.state()
+    await superseded.saveCodeVerifier('first-verifier')
+    await superseded.beginAuthorization('second-generation')
+    const secondState = await superseded.state()
+    await superseded.saveCodeVerifier('second-verifier')
+    await expect(
+      superseded.consumePendingAuthorization(
+        `https://extension.chromiumapp.org/mcp?code=unused&state=${firstState}`,
+        'first-generation',
+      ),
+    ).rejects.toThrow(/no longer current/)
+    await superseded.consumePendingAuthorization(
+      `https://extension.chromiumapp.org/mcp?code=unused&state=${secondState}`,
+      'second-generation',
+    )
+    expect(await superseded.codeVerifier()).toBe('second-verifier')
+
     const cancelled = createProvider()
-    await cancelled.beginAuthorization()
+    await cancelled.beginAuthorization('cancel-generation')
     await cancelled.state()
     await cancelled.saveCodeVerifier('cancelled-verifier')
     await cancelled.clearPendingAuthorization()

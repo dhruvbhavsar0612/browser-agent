@@ -18,8 +18,9 @@ Browser Agent supports remote MCP servers from MV3 without a stdio path.
 - `packages/extension/src/background/handlers/mcp.ts` provides typed CRUD, health, discovery,
   credentials, OAuth, resources, and marketplace messages. It prefers
   `chrome.identity.launchWebAuthFlow`, with a persisted, watched authorization-tab callback fallback
-  when identity flow is unavailable. The existing remote-MCP panel also exposes a minimal manual
-  callback control for providers that cannot return to that tab.
+  only after Chrome cannot capture a callback that the provider already accepted. The existing
+  remote-MCP panel exposes a minimal manual completion control only for that capture-failure case
+  or for an explicitly configured provider-registered redirect.
 - `packages/extension/src/sidepanel/RemoteMcpSettings.tsx` provides direct URL configuration,
   authentication, status, discovery/tool filtering, and Official MCP Registry import.
 
@@ -27,8 +28,10 @@ Server configuration and non-secret headers sync through normal configuration. B
 OAuth tokens, PKCE verifiers, registered client data, and OAuth discovery state are AES-GCM
 encrypted in the dedicated `mcp/` vault namespace in local storage. They are never written to
 synced configuration. An authorization state and PKCE verifier are fresh for every attempt,
-expire after five minutes, require the registered callback origin/path and matching state, and are
-consumed after a completion, cancellation, mismatch, expiry, or replay attempt.
+bound to an opaque attempt generation, expire after five minutes, require the registered callback
+origin/path and matching state, and are consumed after a completion, cancellation, mismatch,
+expiry, or replay attempt. Completion/cancellation and callback watchers are serialized per server,
+so a stale callback cannot consume a newer attempt.
 
 Discovery snapshots are local cache entries with server/version/protocol timestamps. They allow a
 restarted service worker to expose known tools immediately. Missing caches trigger on-demand
@@ -46,9 +49,9 @@ need to explain the supported choices; it contains no credential values.
 | Preset | Default / preferred mode | Allowed alternative | Operational guidance |
 | --- | --- | --- | --- |
 | Context7 Docs | `none` | `api-key` | Start anonymously. If Context7 supplies a higher-limit credential, store it only as a vault API-key secret. |
-| GitHub | `bearer` | `oauth` | Preferred: a least-privilege GitHub fine-grained PAT saved as a bearer vault credential. Use OAuth only when the selected GitHub MCP deployment explicitly supports it. |
-| Linear | `oauth` | — | Connect with OAuth and approve the required workspace access. |
-| Notion | `oauth` | — | Connect with OAuth and approve the required workspace access. |
+| GitHub | `bearer` | `oauth` | Preferred: a least-privilege GitHub fine-grained PAT saved as a bearer vault credential. OAuth requires a deployment that accepts dynamic registration or a provider-registered public client/redirect. |
+| Linear | `oauth` | — | OAuth works only when Linear accepts the extension callback, or when the user configures a Linear-registered public client ID and redirect. |
+| Notion | `oauth` | — | OAuth works only when Notion accepts the extension callback, or when the user configures a Notion-registered public client ID and redirect. |
 | Sentry | `oauth` | `bearer`, `api-key` | Prefer OAuth; for a provider-documented token deployment, save the credential in the vault. |
 | Custom Remote MCP | `none` | `bearer`, `api-key`, `oauth` | Select only the provider-documented mode and keep manual credentials in the vault. |
 
@@ -64,6 +67,7 @@ need to explain the supported choices; it contains no credential values.
 | `network` | DNS, TLS, connection, host-policy, or opaque browser-fetch failure | Verify the HTTPS endpoint, DNS/TLS/network path, extension host permission, and provider CORS policy. Browsers do not reveal which one caused `Failed to fetch`. |
 | `transport` | The selected protocol is unsupported by the endpoint | Use the provider's protocol; use Auto only for possible legacy SSE endpoints. |
 | `protocol` | The endpoint did not complete an MCP handshake | Use the provider's MCP endpoint, not its web page or API root. |
+| `oauth-redirect` | The provider rejected dynamic registration or the Chrome extension callback | Use provider-supported token auth, or configure a provider-registered public client ID and HTTPS/localhost redirect. Browser Agent cannot host or bypass a callback. |
 
 Auto transport starts with Streamable HTTP and tries legacy SSE only after an explicit
 Streamable-HTTP negotiation rejection (`404`, `405`, `406`, `415`, or `501`). It never retries
@@ -133,9 +137,11 @@ await mcp('mcp.server.test', { id: 'context7-sw-smoke' })
 await mcp('mcp.server.discover', { id: 'context7-sw-smoke' })
 ```
 
-Expect `ok: true`, `transport: 'streamable-http'`, and a discovery response. Then stop the
-service worker from `chrome://extensions` and repeat `mcp.server.test`; it should wake a fresh
-worker and reconnect. Remove the temporary server when finished:
+Expect `ok: true`, `transport: 'streamable-http'`, and a discovery response. The CDP-pipe MV3
+smoke on this branch produced Context7 `3.2.5`, protocol `2025-11-25`, and two tools through the
+real service worker. Then stop the service worker from `chrome://extensions` and repeat
+`mcp.server.test`; it should wake a fresh worker and reconnect. Remove the temporary server when
+finished:
 
 ```js
 await mcp('mcp.server.delete', { id: 'context7-sw-smoke' })
@@ -159,12 +165,26 @@ saved bearer credential must still be listed only as an `api` vault entry by
 `mcp.server.list`, never in response data. Remove the temporary GitHub server or use the explicit
 credential removal control when the test is complete.
 
-## OAuth callback fallback
+## OAuth callback and platform constraints
 
-When `chrome.identity` cannot supply a callback, the extension opens an authorization tab and marks
-the server as pending. In the existing remote-MCP server editor, paste the complete final callback
-URL into **Complete OAuth** before the five-minute expiry. The UI sends `mcp.oauth.complete` and
-shows its sanitized health result; **Cancel authorization** sends `mcp.oauth.cancel` and consumes
-the pending state without deleting existing OAuth credentials. Callback URLs can contain an
-authorization code, so they are held only in the page's transient input state and are never logged,
-returned in responses, or saved to configuration.
+`*.chromiumapp.org` is an extension callback, not a hosted callback that can be made acceptable by
+pasting it into a provider error page. If dynamic registration or the Chrome callback is rejected,
+the extension returns the stable `oauth-redirect` result. It does not open a tab or imply that
+manual completion can bypass the provider's allowlist.
+
+The viable paths are:
+
+- **GitHub:** use the preset's preferred least-privilege fine-grained PAT as a vaulted bearer
+  credential. Its external E2E remains intentionally gated on a user-supplied credential.
+- **OAuth providers accepting the extension callback:** use the normal identity flow.
+- **Providers requiring a registered callback:** in the existing server editor, enter a
+  provider-registered **public** client ID and its exact HTTPS (or localhost) redirect URL, then
+  save before connecting. Client secrets are intentionally unsupported and never stored. Browser
+  Agent opens and watches that registered redirect in a tab; it does not invent a hosted callback.
+
+When Chrome fails to capture a callback after the provider has accepted a valid registered redirect,
+the editor offers **Complete OAuth**. Paste only the final callback URL before the five-minute
+expiry; the UI sends `mcp.oauth.complete` with the current attempt generation and shows a sanitized
+result. **Cancel authorization** likewise binds to that generation. Callback URLs can contain an
+authorization code, so they are held only in transient page state and are never logged, returned in
+responses, or saved to configuration.

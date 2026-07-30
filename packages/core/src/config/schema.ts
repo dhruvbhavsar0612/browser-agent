@@ -105,11 +105,31 @@ export const McpToolConfig = z.object({
 })
 export type McpToolConfig = z.infer<typeof McpToolConfig>
 
+/**
+ * A provider-registered public OAuth client. Client secrets are deliberately
+ * unsupported: extension configuration syncs, while OAuth tokens stay vaulted.
+ */
+export const McpOAuthPublicClientConfig = z
+  .object({
+    clientId: z.string().min(1).max(2_048),
+    redirectUrl: z
+      .string()
+      .url()
+      .refine(
+        isSecureRemoteUrl,
+        'OAuth redirect URL must use HTTPS (HTTP is allowed for localhost only)',
+      ),
+  })
+  .strict()
+export type McpOAuthPublicClientConfig = z.infer<typeof McpOAuthPublicClientConfig>
+
 export const McpAuthConfig = z
   .object({
     mode: z.enum(['none', 'bearer', 'api-key', 'oauth']).default('none'),
     /** Header name only. Its value always lives in the encrypted MCP vault namespace. */
     headerName: z.string().min(1).max(128).optional(),
+    /** A non-secret client ID and redirect URI already registered with the provider. */
+    oauth: McpOAuthPublicClientConfig.optional(),
   })
   .default({ mode: 'none' })
 export type McpAuthConfig = z.infer<typeof McpAuthConfig>
@@ -212,8 +232,12 @@ export type ProviderConfigPatch = Partial<Omit<ProviderConfig, 'api' | 'models' 
   models?: Record<string, Partial<ProviderModelConfig>>
 }
 
-export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools'>> & {
+export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools' | 'auth'>> & {
   tools?: Record<string, Partial<McpToolConfig>>
+  auth?: Partial<Omit<McpAuthConfig, 'oauth'>> & {
+    /** Null removes a previously configured public OAuth client. */
+    oauth?: McpOAuthPublicClientConfig | null
+  }
 }
 
 export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider' | 'mcp'> & {
@@ -409,11 +433,15 @@ function mergeMcp(base: AppConfig['mcp'], patch: AppConfigPatch['mcp']): AppConf
       continue
     }
     const current = base[serverId]
+    const authPatch = serverPatch.auth
+    const { oauth: requestedOAuthClient, ...authWithoutOAuth } = authPatch ?? {}
+    const oauthClient =
+      requestedOAuthClient === null ? undefined : requestedOAuthClient ?? current?.auth.oauth
     merged[serverId] = McpServerConfig.parse({
       ...current,
       ...serverPatch,
       headers: serverPatch.headers ?? current?.headers ?? {},
-      auth: { ...current?.auth, ...serverPatch.auth },
+      auth: { ...current?.auth, ...authWithoutOAuth, ...(oauthClient ? { oauth: oauthClient } : {}) },
       tools: { ...current?.tools, ...serverPatch.tools },
     })
   }

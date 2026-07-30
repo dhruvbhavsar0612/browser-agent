@@ -207,6 +207,9 @@ describe('remote MCP message handlers', () => {
       beginOAuth: vi.fn().mockResolvedValue({
         authorizationUrl: 'https://auth.example/authorize?state=test-state',
         state: 'test-state',
+        redirectUrl: 'https://extension.chromiumapp.org/mcp',
+        generation: 'attempt-one',
+        usesConfiguredClient: false,
       }),
       completeOAuth: vi.fn().mockResolvedValue({
         ok: true,
@@ -222,7 +225,12 @@ describe('remote MCP message handlers', () => {
       createRequest('mcp.oauth.connect', { id: 'oauth' }),
     )
 
-    expect(response.payload).toEqual({ ok: true, pending: true, manual: true })
+    expect(response.payload).toEqual({
+      ok: true,
+      pending: true,
+      manual: true,
+      generation: 'attempt-one',
+    })
     expect(chrome.tabs.create).toHaveBeenCalledWith({
       url: 'https://auth.example/authorize?state=test-state',
       active: true,
@@ -244,6 +252,7 @@ describe('remote MCP message handlers', () => {
         'oauth',
         'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state',
         'https://extension.chromiumapp.org/mcp',
+        'attempt-one',
       )
       expect(chrome.tabs.remove).toHaveBeenCalledWith(42)
       expect(sessionState['browser-agent.mcp-oauth-pending']).toEqual({})
@@ -279,6 +288,9 @@ describe('remote MCP message handlers', () => {
       beginOAuth: vi.fn().mockResolvedValue({
         authorizationUrl: 'https://auth.example/authorize',
         state: 'pending-state',
+        redirectUrl: 'https://extension.chromiumapp.org/mcp',
+        generation: 'manual-attempt',
+        usesConfiguredClient: false,
       }),
       completeOAuth: vi.fn().mockResolvedValue({
         ok: true,
@@ -295,7 +307,12 @@ describe('remote MCP message handlers', () => {
       oauthBus,
       createRequest('mcp.oauth.connect', { id: 'oauth' }),
     )
-    expect(pending.payload).toEqual({ ok: true, pending: true, manual: true })
+    expect(pending.payload).toEqual({
+      ok: true,
+      pending: true,
+      manual: true,
+      generation: 'manual-attempt',
+    })
 
     const listed = await dispatchMcpMessage(oauthBus, createRequest('mcp.server.list'))
     expect((listed.payload as { oauthPending?: unknown[] }).oauthPending).toEqual([
@@ -308,6 +325,7 @@ describe('remote MCP message handlers', () => {
       createRequest('mcp.oauth.complete', {
         id: 'oauth',
         callbackUrl: 'https://extension.chromiumapp.org/mcp?code=one-time-code&state=pending-state',
+        generation: 'manual-attempt',
       }),
     )
     expect(completed.type).toBe('mcp.oauth.complete')
@@ -319,6 +337,7 @@ describe('remote MCP message handlers', () => {
       'oauth',
       'https://extension.chromiumapp.org/mcp?code=one-time-code&state=pending-state',
       'https://extension.chromiumapp.org/mcp',
+      'manual-attempt',
     )
     expect(sessionState['browser-agent.mcp-oauth-pending']).toEqual({})
     vi.unstubAllGlobals()
@@ -328,11 +347,33 @@ describe('remote MCP message handlers', () => {
     const exposedAccess = crypto.randomUUID()
     const exposedRefresh = crypto.randomUUID()
     const exposedClientSecret = crypto.randomUUID()
+    const sessionState: Record<string, unknown> = {}
     vi.stubGlobal('chrome', {
-      identity: { getRedirectURL: vi.fn(() => 'https://extension.chromiumapp.org/mcp') },
+      identity: {
+        getRedirectURL: vi.fn(() => 'https://extension.chromiumapp.org/mcp'),
+        launchWebAuthFlow: vi.fn(),
+      },
+      storage: {
+        session: {
+          get: vi.fn(async (key: string) => ({ [key]: sessionState[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(sessionState, value)),
+        },
+      },
+      tabs: {
+        create: vi.fn(async () => ({ id: 42 })),
+        onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+        onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
+      },
     })
     const oauthRegistry = {
       ...registry,
+      beginOAuth: vi.fn().mockResolvedValue({
+        authorizationUrl: 'https://auth.example/authorize',
+        state: 'pending-state',
+        redirectUrl: 'https://app.example/oauth/callback',
+        generation: 'adversarial-attempt',
+        usesConfiguredClient: true,
+      }),
       completeOAuth: vi.fn().mockRejectedValue(
         new Error(
           `token endpoint response: {"access_token":"${exposedAccess}","refresh_token":"${exposedRefresh}","client_secret":"${exposedClientSecret}"}`,
@@ -343,26 +384,156 @@ describe('remote MCP message handlers', () => {
     const oauthBus = createMessageBus()
     registerMcpHandlers(oauthBus, { config, vault, registry: oauthRegistry, marketplace })
 
-    let thrown: Error | undefined
-    try {
-      await dispatchMcpMessage(
-        oauthBus,
-        createRequest('mcp.oauth.complete', {
-          id: 'oauth',
-          callbackUrl: 'https://extension.chromiumapp.org/mcp?code=one-time-code&state=pending-state',
-        }),
-      )
-    } catch (error) {
-      thrown = error as Error
-    }
-
-    expect(thrown?.message).toBe(
-      'MCP OAuth could not be completed. Restart Connect and complete the callback before it expires.',
+    await dispatchMcpMessage(oauthBus, createRequest('mcp.oauth.connect', { id: 'oauth' }))
+    const completed = await dispatchMcpMessage(
+      oauthBus,
+      createRequest('mcp.oauth.complete', {
+        id: 'oauth',
+        callbackUrl: 'https://app.example/oauth/callback?code=one-time-code&state=pending-state',
+        generation: 'adversarial-attempt',
+      }),
     )
-    expect(thrown?.message).not.toContain(exposedAccess)
-    expect(thrown?.message).not.toContain(exposedRefresh)
-    expect(thrown?.message).not.toContain(exposedClientSecret)
-    expect(oauthRegistry.cancelOAuth).toHaveBeenCalledWith('oauth')
+    const serialized = JSON.stringify(completed)
+
+    expect(completed.payload).toMatchObject({
+      ok: false,
+      error: {
+        code: 'auth',
+        message: 'MCP OAuth could not be completed.',
+      },
+    })
+    expect(serialized).not.toContain(exposedAccess)
+    expect(serialized).not.toContain(exposedRefresh)
+    expect(serialized).not.toContain(exposedClientSecret)
+    expect(oauthRegistry.cancelOAuth).toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('returns an actionable result when the provider rejects Chrome OAuth registration', async () => {
+    vi.stubGlobal('chrome', {
+      identity: { getRedirectURL: vi.fn(() => 'https://extension.chromiumapp.org/mcp') },
+    })
+    const oauthRegistry = {
+      ...registry,
+      beginOAuth: vi.fn().mockRejectedValue(
+        new McpClientError(
+          'This provider does not accept Browser Agent’s dynamic OAuth client or Chrome extension callback.',
+          'oauth-redirect',
+          undefined,
+          'Use a provider-registered public OAuth client or supported token auth.',
+        ),
+      ),
+      cancelOAuth: vi.fn().mockResolvedValue(undefined),
+    } as unknown as RemoteMcpRegistry
+    const oauthBus = createMessageBus()
+    registerMcpHandlers(oauthBus, { config, vault, registry: oauthRegistry, marketplace })
+
+    const response = await dispatchMcpMessage(
+      oauthBus,
+      createRequest('mcp.oauth.connect', { id: 'oauth' }),
+    )
+
+    expect(response.payload).toEqual({
+      ok: false,
+      error: {
+        code: 'oauth-redirect',
+        message:
+          'This provider does not accept Browser Agent’s dynamic OAuth client or Chrome extension callback.',
+        action: 'Use a provider-registered public OAuth client or supported token auth.',
+      },
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it('ignores a stale callback after a newer attempt and restores the current watcher', async () => {
+    const sessionState: Record<string, unknown> = {}
+    const updatedListeners = new Set<
+      (
+        tabId: number,
+        changeInfo: chrome.tabs.TabChangeInfo,
+        tab: chrome.tabs.Tab,
+      ) => void
+    >()
+    let nextTabId = 42
+    vi.stubGlobal('chrome', {
+      runtime: { lastError: { message: 'Identity callback capture failed' } },
+      identity: {
+        getRedirectURL: vi.fn(() => 'https://extension.chromiumapp.org/mcp'),
+        launchWebAuthFlow: vi.fn((_options, callback) => callback(undefined)),
+      },
+      storage: {
+        session: {
+          get: vi.fn(async (key: string) => ({ [key]: sessionState[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(sessionState, value)),
+        },
+      },
+      tabs: {
+        create: vi.fn(async () => ({ id: nextTabId++ })),
+        remove: vi.fn(async () => undefined),
+        onUpdated: {
+          addListener: vi.fn((listener) => updatedListeners.add(listener)),
+          removeListener: vi.fn((listener) => updatedListeners.delete(listener)),
+        },
+        onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
+      },
+    })
+    const oauthRegistry = {
+      ...registry,
+      beginOAuth: vi
+        .fn()
+        .mockResolvedValueOnce({
+          authorizationUrl: 'https://auth.example/authorize?attempt=one',
+          state: 'first-state',
+          redirectUrl: 'https://extension.chromiumapp.org/mcp',
+          generation: 'first-generation',
+          usesConfiguredClient: false,
+        })
+        .mockResolvedValueOnce({
+          authorizationUrl: 'https://auth.example/authorize?attempt=two',
+          state: 'second-state',
+          redirectUrl: 'https://extension.chromiumapp.org/mcp',
+          generation: 'second-generation',
+          usesConfiguredClient: false,
+        }),
+      completeOAuth: vi.fn().mockResolvedValue({
+        ok: true,
+        serverId: 'oauth',
+        checkedAt: 1,
+      }),
+      cancelOAuth: vi.fn().mockResolvedValue(true),
+    } as unknown as RemoteMcpRegistry
+    const oauthBus = createMessageBus()
+    registerMcpHandlers(oauthBus, { config, vault, registry: oauthRegistry, marketplace })
+
+    await dispatchMcpMessage(oauthBus, createRequest('mcp.oauth.connect', { id: 'oauth' }))
+    const staleListener = [...updatedListeners][0]!
+    await dispatchMcpMessage(oauthBus, createRequest('mcp.oauth.connect', { id: 'oauth' }))
+
+    staleListener(
+      42,
+      { url: 'https://extension.chromiumapp.org/mcp?code=stale&state=first-state' },
+      { id: 42, url: 'https://extension.chromiumapp.org/mcp?code=stale&state=first-state' } as chrome.tabs.Tab,
+    )
+    await Promise.resolve()
+    expect(oauthRegistry.completeOAuth).not.toHaveBeenCalled()
+
+    const restoredBus = createMessageBus()
+    registerMcpHandlers(restoredBus, { config, vault, registry: oauthRegistry, marketplace })
+    await vi.waitFor(() => expect(updatedListeners).toHaveLength(1))
+    const currentListener = [...updatedListeners][0]!
+    currentListener(
+      43,
+      { url: 'https://extension.chromiumapp.org/mcp?code=current&state=second-state' },
+      { id: 43, url: 'https://extension.chromiumapp.org/mcp?code=current&state=second-state' } as chrome.tabs.Tab,
+    )
+    await vi.waitFor(() => {
+      expect(oauthRegistry.completeOAuth).toHaveBeenCalledWith(
+        'oauth',
+        'https://extension.chromiumapp.org/mcp?code=current&state=second-state',
+        'https://extension.chromiumapp.org/mcp',
+        'second-generation',
+      )
+    })
     vi.unstubAllGlobals()
   })
 })

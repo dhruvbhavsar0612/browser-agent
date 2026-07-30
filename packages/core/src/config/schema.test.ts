@@ -85,6 +85,32 @@ describe('config schema', () => {
     expect(mergeConfig(patched, { mcp: { docs: null } }).mcp.docs).toBeUndefined()
   })
 
+  it('keeps only public OAuth client configuration in synced MCP settings', () => {
+    const configured = mergeConfig(DEFAULT_CONFIG, {
+      mcp: {
+        oauth: {
+          url: 'https://mcp.example.com/mcp',
+          auth: {
+            mode: 'oauth',
+            oauth: {
+              clientId: 'provider-public-client',
+              redirectUrl: 'https://app.example.com/oauth/callback',
+            },
+          },
+        },
+      },
+    })
+    expect(configured.mcp.oauth?.auth.oauth).toEqual({
+      clientId: 'provider-public-client',
+      redirectUrl: 'https://app.example.com/oauth/callback',
+    })
+    expect(
+      mergeConfig(configured, {
+        mcp: { oauth: { auth: { oauth: null } } },
+      }).mcp.oauth?.auth.oauth,
+    ).toBeUndefined()
+  })
+
   it('requires HTTPS except for localhost and rejects secret synced headers', () => {
     expect(() =>
       mergeConfig(DEFAULT_CONFIG, {

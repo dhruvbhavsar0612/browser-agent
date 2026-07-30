@@ -61,12 +61,12 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
       preferred: 'bearer',
       alternatives: ['oauth'],
       setup:
-        'Use a least-privilege GitHub fine-grained PAT as a bearer credential. OAuth is only a fallback when the selected GitHub MCP deployment explicitly supports it.',
+        'Use a least-privilege GitHub fine-grained PAT as a bearer credential. OAuth requires a deployment that accepts dynamic registration or a provider-registered public client and redirect.',
     },
     docsUrl: 'https://github.com/github/github-mcp-server',
     tags: ['git', 'github', 'repositories', 'pull-requests', 'issues'],
     setupHint:
-      'Recommended: save a least-privilege GitHub fine-grained PAT as the bearer credential. Use OAuth only when the selected GitHub MCP deployment supports it.',
+      'Recommended: save a least-privilege GitHub fine-grained PAT as the bearer credential. OAuth needs a supported deployment or a provider-registered public client and redirect.',
   },
   {
     id: 'linear',
@@ -79,11 +79,13 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     authStrategy: {
       preferred: 'oauth',
       alternatives: [],
-      setup: 'Connect with OAuth and approve the requested Linear workspace access.',
+      setup:
+        'Connect with OAuth when Linear accepts the extension callback, or configure a provider-registered public OAuth client and redirect.',
     },
     docsUrl: 'https://linear.app/docs/mcp',
     tags: ['linear', 'issues', 'projects', 'planning', 'workspace', 'oauth'],
-    setupHint: 'Connect with OAuth to authorize access to your Linear workspace.',
+    setupHint:
+      'Connect with OAuth when Linear accepts the extension callback. Otherwise use a provider-registered public OAuth client and redirect; Browser Agent cannot host a callback.',
   },
   {
     id: 'notion',
@@ -97,11 +99,13 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     authStrategy: {
       preferred: 'oauth',
       alternatives: [],
-      setup: 'Connect with OAuth and approve the requested Notion workspace access.',
+      setup:
+        'Connect with OAuth when Notion accepts the extension callback, or configure a provider-registered public OAuth client and redirect.',
     },
     docsUrl: 'https://developers.notion.com/guides/mcp/get-started-with-mcp',
     tags: ['notion', 'docs', 'workspace', 'databases', 'oauth'],
-    setupHint: 'Connect with OAuth and approve the workspace content this MCP server can access.',
+    setupHint:
+      'Connect with OAuth when Notion accepts the extension callback. Otherwise use a provider-registered public OAuth client and redirect; Browser Agent cannot host a callback.',
   },
   {
     id: 'sentry',

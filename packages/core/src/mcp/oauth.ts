@@ -14,6 +14,7 @@ interface StoredMcpOAuth {
   clientInformation?: OAuthClientInformationMixed
   codeVerifier?: string
   state?: string
+  pendingGeneration?: string
   pendingCreatedAt?: number
   pendingRedirectUrl?: string
   discovery?: OAuthDiscoveryState
@@ -38,6 +39,7 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
     private readonly options: {
       now?: () => number
       pendingTtlMs?: number
+      clientId?: string
     } = {},
   ) {}
 
@@ -62,10 +64,12 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
+    if (this.options.clientId) return { client_id: this.options.clientId }
     return (await this.read()).clientInformation
   }
 
   async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
+    if (this.options.clientId) return
     await this.update({ clientInformation })
   }
 
@@ -134,11 +138,11 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
    * Each browser authorization request receives a fresh state/verifier pair.
    * Existing tokens, registration, and discovery data remain intact.
    */
-  async beginAuthorization(): Promise<void> {
+  async beginAuthorization(generation = crypto.randomUUID()): Promise<void> {
     const current = await this.read()
     this.consumedCodeVerifier = undefined
     this.removePending(current)
-    await this.write(current)
+    await this.write({ ...current, pendingGeneration: generation })
   }
 
   /**
@@ -146,8 +150,11 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
    * The verifier stays only in this provider instance for the exchange, making
    * the callback one-time even if the service worker receives a replay.
    */
-  async consumePendingAuthorization(callbackUrl: string): Promise<void> {
+  async consumePendingAuthorization(callbackUrl: string, generation?: string): Promise<void> {
     const current = await this.read()
+    if (!generation || current.pendingGeneration !== generation) {
+      throw new Error('MCP OAuth attempt is no longer current; restart authorization')
+    }
     let callback: URL
     try {
       callback = new URL(callbackUrl)
@@ -187,11 +194,13 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
     await this.write(current)
   }
 
-  async clearPendingAuthorization(): Promise<void> {
+  async clearPendingAuthorization(generation?: string): Promise<boolean> {
     this.consumedCodeVerifier = undefined
     const current = await this.read()
+    if (generation && current.pendingGeneration !== generation) return false
     this.removePending(current)
     await this.write(current)
+    return true
   }
 
   async disconnect(): Promise<void> {
@@ -209,6 +218,7 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
   private removePending(value: StoredMcpOAuth): void {
     delete value.state
     delete value.codeVerifier
+    delete value.pendingGeneration
     delete value.pendingCreatedAt
     delete value.pendingRedirectUrl
   }

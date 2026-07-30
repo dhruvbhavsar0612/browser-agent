@@ -58,6 +58,7 @@ export const MCP_HEALTH_ERROR_CODES = [
   'protocol',
   'transport',
   'configuration',
+  'oauth-redirect',
   'server',
 ] as const
 

@@ -18,6 +18,8 @@ type ServerDraft = {
   transport: McpServerConfigType['transport']
   authMode: McpServerConfigType['auth']['mode']
   headerName: string
+  oauthClientId: string
+  oauthRedirectUrl: string
   headers: string
 }
 
@@ -43,8 +45,15 @@ function toDraft(server: McpServerConfigType): ServerDraft {
     transport: server.transport,
     authMode: server.auth.mode,
     headerName: server.auth.headerName ?? '',
+    oauthClientId: server.auth.oauth?.clientId ?? '',
+    oauthRedirectUrl: server.auth.oauth?.redirectUrl ?? '',
     headers: JSON.stringify(server.headers ?? {}, null, 2),
   }
+}
+
+type OAuthPending = {
+  generation: string
+  manual: boolean
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -69,7 +78,7 @@ export function RemoteMcpSettings() {
   const [tokens, setTokens] = useState<Record<string, string>>({})
   const [toolSearch, setToolSearch] = useState<Record<string, string>>({})
   const [health, setHealth] = useState<Record<string, McpHealth>>({})
-  const [pendingOAuth, setPendingOAuth] = useState<Record<string, boolean>>({})
+  const [pendingOAuth, setPendingOAuth] = useState<Record<string, OAuthPending>>({})
   const [oauthCallbacks, setOAuthCallbacks] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -89,7 +98,7 @@ export function RemoteMcpSettings() {
       servers?: ServerMap
       discoveries?: McpDiscovery[]
       credentials?: McpVaultListEntry[]
-      oauthPending?: Array<{ serverId: string; createdAt: number }>
+      oauthPending?: Array<{ serverId: string; generation: string; manual: boolean }>
     }
     const nextServers = payload.servers ?? {}
     setServers(nextServers)
@@ -98,7 +107,12 @@ export function RemoteMcpSettings() {
     )
     setCredentials(payload.credentials ?? [])
     setPendingOAuth(
-      Object.fromEntries((payload.oauthPending ?? []).map((pending) => [pending.serverId, true])),
+      Object.fromEntries(
+        (payload.oauthPending ?? []).map((pending) => [
+          pending.serverId,
+          { generation: pending.generation, manual: pending.manual },
+        ]),
+      ),
     )
     setDrafts(
       Object.fromEntries(Object.entries(nextServers).map(([id, server]) => [id, toDraft(server)])),
@@ -235,6 +249,14 @@ export function RemoteMcpSettings() {
       } catch {
         throw new Error('Non-secret headers must be a JSON object of string values')
       }
+      const oauthClientId = draft.oauthClientId.trim()
+      const oauthRedirectUrl = draft.oauthRedirectUrl.trim()
+      if (
+        draft.authMode === 'oauth' &&
+        Boolean(oauthClientId) !== Boolean(oauthRedirectUrl)
+      ) {
+        throw new Error('Provide both the provider-registered public client ID and redirect URL')
+      }
       await request('mcp.server.update', {
         id,
         patch: {
@@ -247,6 +269,10 @@ export function RemoteMcpSettings() {
             ...(draft.authMode === 'api-key' && draft.headerName.trim()
               ? { headerName: draft.headerName.trim() }
               : {}),
+            oauth:
+              draft.authMode === 'oauth' && oauthClientId && oauthRedirectUrl
+                ? { clientId: oauthClientId, redirectUrl: oauthRedirectUrl }
+                : null,
           },
         },
       })
@@ -306,10 +332,24 @@ export function RemoteMcpSettings() {
   async function connectOAuth(id: string) {
     await run(`oauth:${id}`, async () => {
       const response = await request('mcp.oauth.connect', { id })
-      const result = response.payload as { health?: McpHealth; pending?: boolean; manual?: boolean }
+      const result = response.payload as {
+        health?: McpHealth
+        pending?: boolean
+        manual?: boolean
+        generation?: string
+        error?: { message: string; action: string }
+      }
+      if (result.error) {
+        setError(`${result.error.message} ${result.error.action}`)
+        await load()
+        return
+      }
       if (result.health) setHealth((current) => ({ ...current, [id]: result.health! }))
-      if (result.pending && result.manual) {
-        setPendingOAuth((current) => ({ ...current, [id]: true }))
+      if (result.pending && result.manual && result.generation) {
+        setPendingOAuth((current) => ({
+          ...current,
+          [id]: { generation: result.generation!, manual: true },
+        }))
       }
       await load()
     })
@@ -317,24 +357,57 @@ export function RemoteMcpSettings() {
 
   async function completeOAuth(id: string) {
     const callbackUrl = oauthCallbacks[id]?.trim()
+    const pending = pendingOAuth[id]
     if (!callbackUrl) {
       setError('Paste the complete OAuth callback URL before completing authorization')
       return
     }
+    if (!pending?.generation) {
+      setError('This OAuth attempt is no longer current. Start authorization again.')
+      return
+    }
     await run(`oauth:${id}`, async () => {
-      const response = await request('mcp.oauth.complete', { id, callbackUrl })
-      const result = response.payload as { health?: McpHealth }
+      const response = await request('mcp.oauth.complete', {
+        id,
+        callbackUrl,
+        generation: pending.generation,
+      })
+      const result = response.payload as {
+        health?: McpHealth
+        error?: { message: string; action: string }
+      }
+      if (result.error) {
+        setError(`${result.error.message} ${result.error.action}`)
+        await load()
+        return
+      }
       if (result.health) setHealth((current) => ({ ...current, [id]: result.health! }))
-      setPendingOAuth((current) => ({ ...current, [id]: false }))
+      setPendingOAuth((current) => {
+        const next = { ...current }
+        delete next[id]
+        return next
+      })
       setOAuthCallbacks((current) => ({ ...current, [id]: '' }))
       await load()
     })
   }
 
   async function cancelOAuth(id: string) {
+    const pending = pendingOAuth[id]
+    if (!pending?.generation) return
     await run(`oauth:${id}`, async () => {
-      await request('mcp.oauth.cancel', { id })
-      setPendingOAuth((current) => ({ ...current, [id]: false }))
+      const response = await request('mcp.oauth.cancel', { id, generation: pending.generation })
+      const result = response.payload as { error?: { message: string; action: string } }
+      if (result.error) {
+        setError(`${result.error.message} ${result.error.action}`)
+        await load()
+        return
+      }
+      setPendingOAuth((current) => {
+        const next = { ...current }
+        delete next[id]
+        return next
+      })
       setOAuthCallbacks((current) => ({ ...current, [id]: '' }))
       await load()
     })
@@ -535,6 +608,7 @@ export function RemoteMcpSettings() {
             const hasManual = credentialSet.has(`${id}:api`)
             const hasOAuth = credentialSet.has(`${id}:oauth`)
             const isExpanded = expandedServers.has(id)
+            const oauthAttempt = pendingOAuth[id]
 
             return (
               <div className="settings-provider mcp-server" key={id}>
@@ -689,6 +763,41 @@ export function RemoteMcpSettings() {
                       />
                     ) : null}
 
+                    {draft.authMode === 'oauth' ? (
+                      <div className="mcp-grid">
+                        <input
+                          className="settings-input"
+                          aria-label={`${id} OAuth public client ID`}
+                          placeholder="Optional provider-registered public client ID"
+                          value={draft.oauthClientId}
+                          onChange={(event) =>
+                            setDrafts((current) => ({
+                              ...current,
+                              [id]: { ...draft, oauthClientId: event.target.value },
+                            }))
+                          }
+                        />
+                        <input
+                          className="settings-input mcp-url"
+                          type="url"
+                          aria-label={`${id} OAuth redirect URL`}
+                          placeholder="Optional provider-registered redirect URL"
+                          value={draft.oauthRedirectUrl}
+                          onChange={(event) =>
+                            setDrafts((current) => ({
+                              ...current,
+                              [id]: { ...draft, oauthRedirectUrl: event.target.value },
+                            }))
+                          }
+                        />
+                        <p className="settings-hint">
+                          Optional public-client override for providers that reject Chrome&apos;s
+                          callback. Enter both values only after registering them with the provider;
+                          client secrets are not supported or stored.
+                        </p>
+                      </div>
+                    ) : null}
+
                     <textarea
                       className="settings-input mcp-headers"
                       aria-label={`${id} non-secret headers`}
@@ -723,11 +832,13 @@ export function RemoteMcpSettings() {
                           Uses protected-resource and authorization-server discovery, PKCE, resource
                           indicators, and encrypted refresh-token storage.
                         </p>
-                        {pendingOAuth[id] ? (
+                        {oauthAttempt?.manual ? (
                           <>
                             <p className="settings-hint">
-                              The authorization tab could not return automatically. Paste the complete
-                              callback URL from the provider before this authorization expires.
+                              The provider already accepted this registered redirect, but Chrome could
+                              not capture it automatically. Paste the complete final callback URL
+                              before this authorization expires. This cannot make an unregistered
+                              callback acceptable to the provider.
                             </p>
                             <input
                               className="settings-input"
@@ -762,6 +873,10 @@ export function RemoteMcpSettings() {
                               </button>
                             </div>
                           </>
+                        ) : oauthAttempt ? (
+                          <p className="settings-hint">
+                            OAuth authorization is in progress in the browser window.
+                          </p>
                         ) : (
                           <button
                             className={`settings-btn ${hasOAuth ? 'settings-btn-danger' : 'settings-btn-primary'}`}

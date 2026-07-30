@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   SENSITIVE_DEFAULT_RULES,
   evaluate,
@@ -14,6 +14,14 @@ import {
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import { RemoteMcpSettings } from './RemoteMcpSettings.js'
+import { SettingsShell } from './SettingsShell.js'
+import {
+  AgentSettingsView,
+  ConnectorsSettingsView,
+  DeveloperSettingsView,
+  PermissionsSettingsView,
+  ProvidersSettingsView,
+} from './SettingsViews.js'
 import './Settings.css'
 
 const KEY_PROVIDERS = [
@@ -31,14 +39,6 @@ const KEY_PROVIDERS = [
 ] as const
 
 const CATALOG_PROVIDER_IDS = new Set(['anthropic', 'openai', 'google', 'openrouter'])
-
-const NAV_SECTIONS = [
-  { id: 'providers', label: 'Providers' },
-  { id: 'defaults', label: 'Defaults' },
-  { id: 'agent', label: 'Agent' },
-  { id: 'mcp', label: 'MCP' },
-  { id: 'permissions', label: 'Permissions' },
-] as const
 
 type KeyProviderId = string
 type OAuthProviderId = 'openai' | 'anthropic'
@@ -101,8 +101,6 @@ export function SettingsView() {
   const [oauthMessage, setOauthMessage] = useState<Partial<Record<OAuthProviderId, string>>>({})
   const [compactionDraft, setCompactionDraft] = useState<CompactionConfigType | null>(null)
   const [savingCompaction, setSavingCompaction] = useState(false)
-  const [activeSection, setActiveSection] = useState<string>('providers')
-  const mainRef = useRef<HTMLElement>(null)
 
   const applyModelsResponse = useCallback((modelsRes: Awaited<ReturnType<typeof sendRequest>>) => {
     if (modelsRes.type === 'error') {
@@ -242,26 +240,6 @@ export function SettingsView() {
       window.clearInterval(id)
     }
   }, [config, oauthManual, refreshModels])
-
-  // Track active section via IntersectionObserver
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setActiveSection(entry.target.id)
-          }
-        }
-      },
-      { rootMargin: '-20% 0px -70% 0px' },
-    )
-    const ids = NAV_SECTIONS.map((s) => s.id)
-    for (const id of ids) {
-      const el = document.getElementById(id)
-      if (el) observer.observe(el)
-    }
-    return () => observer.disconnect()
-  }, [loading])
 
   const modelOptions = useMemo(() => {
     if (!config) return []
@@ -716,10 +694,6 @@ export function SettingsView() {
     }
   }
 
-  function scrollToSection(id: string) {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-
   if (loading) {
     return (
       <div className="settings">
@@ -737,29 +711,11 @@ export function SettingsView() {
 
       {error ? <p className="settings-error">{error}</p> : null}
 
-      <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
-          {NAV_SECTIONS.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              className={`settings-nav-item${activeSection === section.id ? ' settings-nav-item-active' : ''}`}
-              onClick={() => scrollToSection(section.id)}
-            >
-              {section.label}
-            </button>
-          ))}
-        </nav>
-
-        <main className="settings-main" ref={mainRef}>
-          {/* ── Providers ─────────────────────────────── */}
-          <section className="settings-section" id="providers">
-            <div className="settings-section-heading">
-              <h2>Providers</h2>
-              <p className="settings-section-desc">
-                Connect API keys or OAuth accounts, then discover and enable models.
-              </p>
-            </div>
+      <SettingsShell>
+        {(activeView) => (
+          <>
+            {/* ── Providers ─────────────────────────────── */}
+            <ProvidersSettingsView hidden={activeView !== 'providers'}>
 
             {KEY_PROVIDERS.map((provider) => {
               const configured = hasKey(vaultEntries, provider.id, 'api')
@@ -1407,10 +1363,10 @@ export function SettingsView() {
                 Clear all keys
               </button>
             </div>
-          </section>
+            </ProvidersSettingsView>
 
-          {/* ── Defaults ──────────────────────────────── */}
-          <section className="settings-section" id="defaults">
+            {/* ── Defaults ──────────────────────────────── */}
+            <section className="settings-section" hidden={activeView !== 'providers'}>
             <div className="settings-section-heading">
               <h2>Defaults</h2>
               <p className="settings-section-desc">
@@ -1493,15 +1449,8 @@ export function SettingsView() {
             ) : null}
           </section>
 
-          {/* ── Agent / Compaction ────────────────────── */}
-          <section className="settings-section" id="agent">
-            <div className="settings-section-heading">
-              <h2>Agent</h2>
-              <p className="settings-section-desc">
-                Context compaction controls how the agent summarises long conversations to stay
-                within the model's context window.
-              </p>
-            </div>
+            {/* ── Agent / Compaction ────────────────────── */}
+            <AgentSettingsView hidden={activeView !== 'agent'}>
 
             {compactionDraft ? (
               <div className="settings-compaction">
@@ -1643,25 +1592,22 @@ export function SettingsView() {
                 </div>
               </div>
             ) : null}
-          </section>
+            </AgentSettingsView>
 
-          {/* ── MCP ───────────────────────────────────── */}
-          <section className="settings-section" id="mcp">
-            <div className="settings-section-heading">
-              <h2>MCP</h2>
-              <p className="settings-section-desc">
-                Model Context Protocol servers extend the agent with external tools.
-              </p>
-            </div>
-            <RemoteMcpSettings />
-          </section>
+            {/* ── Connectors ───────────────────────────── */}
+            <ConnectorsSettingsView hidden={activeView !== 'connectors'}>
+              <RemoteMcpSettings />
+            </ConnectorsSettingsView>
 
-          {/* ── Permissions ───────────────────────────── */}
-          <section className="settings-section" id="permissions">
-            <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
-          </section>
-        </main>
-      </div>
+            {/* ── Permissions ───────────────────────────── */}
+            <PermissionsSettingsView hidden={activeView !== 'permissions'}>
+              <SiteRulesSection config={config} onConfig={setConfig} setError={setError} />
+            </PermissionsSettingsView>
+
+            <DeveloperSettingsView hidden={activeView !== 'developer'} />
+          </>
+        )}
+      </SettingsShell>
     </div>
   )
 }
@@ -1764,7 +1710,7 @@ function SiteRulesSection({
   return (
     <>
       <div className="settings-section-heading">
-        <h2>Permissions</h2>
+        <h2 id="permissions-heading">Permissions</h2>
         <p className="settings-section-desc">
           URL globs per tool. Sensitive paths (checkout / payment / login) are denied by default
           and always win.

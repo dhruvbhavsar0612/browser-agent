@@ -28,7 +28,7 @@
   line-height: 1.5;
 }
 
-/* ── Two-column layout ──────────────────────────── */
+/* ── View-switching layout ───────────────────────── */
 .settings-layout {
   display: flex;
   gap: 40px;
@@ -74,9 +74,6 @@
 .settings-main {
   flex: 1 1 0;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 48px;
 }
 
 /* ── Section ────────────────────────────────────── */
@@ -84,7 +81,10 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  scroll-margin-top: 16px;
+}
+
+.settings-section[hidden] {
+  display: none;
 }
 
 .settings-section-heading {

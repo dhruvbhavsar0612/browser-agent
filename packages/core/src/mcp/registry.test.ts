@@ -219,7 +219,7 @@ describe('RemoteMcpRegistry', () => {
       ok: false,
       error: {
         code: 'network',
-        action: expect.stringContaining('does not distinguish'),
+        action: expect.stringContaining('Browser fetch reports this same opaque failure'),
       },
     })
     expect(attempts).toEqual(['streamable-http'])

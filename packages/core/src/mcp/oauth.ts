@@ -138,7 +138,7 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
    * Each browser authorization request receives a fresh state/verifier pair.
    * Existing tokens, registration, and discovery data remain intact.
    */
-  async beginAuthorization(generation = crypto.randomUUID()): Promise<void> {
+  async beginAuthorization(generation: string = crypto.randomUUID()): Promise<void> {
     const current = await this.read()
     this.consumedCodeVerifier = undefined
     this.removePending(current)

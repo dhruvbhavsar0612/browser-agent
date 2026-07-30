@@ -458,7 +458,7 @@ export class RemoteMcpRegistry {
   async beginOAuth(
     serverId: string,
     redirectUrl = this.resolveRedirectUrl(),
-    generation = crypto.randomUUID(),
+    generation: string = crypto.randomUUID(),
   ): Promise<{
     authorizationUrl: string
     state: string

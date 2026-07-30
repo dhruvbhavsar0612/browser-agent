@@ -241,10 +241,10 @@ describe('remote MCP message handlers', () => {
         'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state',
         'https://extension.chromiumapp.org/mcp',
       )
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(42)
+      expect(sessionState['browser-agent.mcp-oauth-pending']).toEqual({})
     })
 
-    expect(chrome.tabs.remove).toHaveBeenCalledWith(42)
-    expect(sessionState['browser-agent.mcp-oauth-pending']).toEqual({})
     expect(JSON.stringify(sessionState)).not.toContain('test-code')
     expect(removedListeners).toHaveLength(0)
     vi.unstubAllGlobals()

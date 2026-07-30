@@ -33,11 +33,19 @@ describe('MCP presets', () => {
           id: 'context7-docs',
           url: 'https://mcp.context7.com/mcp',
           authMode: 'none',
+          authStrategy: expect.objectContaining({
+            preferred: 'none',
+            alternatives: expect.arrayContaining(['api-key']),
+          }),
         }),
         expect.objectContaining({
           id: 'github-official',
           url: 'https://api.githubcopilot.com/mcp/',
-          authMode: 'oauth',
+          authMode: 'bearer',
+          authStrategy: expect.objectContaining({
+            preferred: 'bearer',
+            alternatives: ['oauth'],
+          }),
         }),
         expect.objectContaining({
           id: 'linear',
@@ -58,6 +66,15 @@ describe('MCP presets', () => {
     )
   })
 
+  it('provides a concrete non-secret auth strategy for every preset', () => {
+    for (const preset of listMcpPresets()) {
+      expect(preset.authStrategy.preferred).toBe(preset.authMode)
+      expect(preset.authStrategy.setup).not.toMatch(
+        /\b(?:token|secret|pat)\s*[:=]\s*\S+/i,
+      )
+    }
+  })
+
   it('searches name, description, and tags case-insensitively', () => {
     expect(searchMcpPresets('github').map((preset) => preset.id)).toEqual(['github-official'])
     expect(searchMcpPresets('OBSERVABILITY').map((preset) => preset.id)).toEqual(['sentry'])
@@ -71,11 +88,13 @@ describe('MCP presets', () => {
 
     first.name = 'Changed'
     first.tags.push('mutated')
+    first.authStrategy.alternatives.push('bearer')
 
     expect(listMcpPresets()[0]).toMatchObject({
       id: 'context7-docs',
       name: 'Context7 Docs',
       tags: expect.not.arrayContaining(['mutated']),
+      authStrategy: { alternatives: ['api-key'] },
     })
   })
 

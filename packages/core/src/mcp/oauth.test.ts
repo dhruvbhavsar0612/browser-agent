@@ -130,4 +130,107 @@ describe('MCP OAuth 2.1', () => {
     ).rejects.toThrow(/state mismatch/)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('refreshes OAuth after a service-worker restart without deleting the vaulted credential', async () => {
+    const storage = createMemoryStorage()
+    const config = new ConfigService(storage)
+    const vault = new CredentialVault(storage)
+    await config.set({
+      mcp: {
+        oauth: {
+          name: 'OAuth MCP',
+          url: 'https://mcp.example/mcp',
+          auth: { mode: 'oauth' },
+        },
+      },
+    })
+    await vault.setMcp(
+      'oauth',
+      JSON.stringify({
+        tokens: {
+          access_token: 'test-previous-access',
+          refresh_token: 'test-refresh-marker',
+          token_type: 'Bearer',
+        },
+        clientInformation: { client_id: 'browser-agent-test' },
+        discovery: {
+          authorizationServerUrl: 'https://auth.example',
+          authorizationServerMetadata: {
+            issuer: 'https://auth.example',
+            authorization_endpoint: 'https://auth.example/authorize',
+            token_endpoint: 'https://auth.example/token',
+            response_types_supported: ['code'],
+            token_endpoint_auth_methods_supported: ['none'],
+          },
+          resourceMetadata: {
+            resource: 'https://mcp.example/mcp',
+            authorization_servers: ['https://auth.example'],
+          },
+        },
+      }),
+      'oauth',
+    )
+
+    let refreshRequests = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.href === 'https://auth.example/token') {
+        refreshRequests += 1
+        const body = new URLSearchParams(String(init?.body ?? ''))
+        expect(body.get('grant_type')).toBe('refresh_token')
+        expect(body.get('refresh_token')).toBe('test-refresh-marker')
+        return Response.json({
+          access_token: 'test-refreshed-access',
+          refresh_token: 'test-refresh-marker',
+          token_type: 'Bearer',
+        })
+      }
+      if (url.href !== 'https://mcp.example/mcp') {
+        throw new Error(`Unexpected OAuth request: ${url}`)
+      }
+
+      const headers = new Headers(init?.headers)
+      if (headers.get('authorization') !== 'Bearer test-refreshed-access') {
+        return new Response(null, {
+          status: 401,
+          headers: {
+            'www-authenticate':
+              'Bearer resource_metadata="https://mcp.example/.well-known/oauth-protected-resource"',
+          },
+        })
+      }
+      const raw = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      const request = Array.isArray(raw) ? raw[0] : raw
+      const result =
+        request?.method === 'initialize'
+          ? {
+              protocolVersion: '2025-11-25',
+              capabilities: {},
+              serverInfo: { name: 'oauth-mcp', version: '1.0.0' },
+            }
+          : {}
+      return Response.json(
+        { jsonrpc: '2.0', id: request?.id, result },
+        { headers: { 'content-type': 'application/json', 'mcp-session-id': 'oauth-session' } },
+      )
+    })
+
+    const firstWorkerRegistry = new RemoteMcpRegistry(config, vault, storage, {
+      fetch: fetchMock as typeof fetch,
+    })
+    expect((await firstWorkerRegistry.testConnection('oauth')).ok).toBe(true)
+    expect(refreshRequests).toBe(1)
+    await firstWorkerRegistry.closeAll()
+
+    const restartedWorkerRegistry = new RemoteMcpRegistry(config, vault, storage, {
+      fetch: fetchMock as typeof fetch,
+    })
+    expect((await restartedWorkerRegistry.testConnection('oauth')).ok).toBe(true)
+    expect(refreshRequests).toBe(1)
+    expect((await vault.getMcp('oauth', 'oauth'))?.secret).toContain('test-refreshed-access')
+    expect(JSON.stringify(await storage.getLocal<unknown>(VAULT_LOCAL_KEY))).not.toContain(
+      'test-refreshed-access',
+    )
+    await restartedWorkerRegistry.closeAll()
+  })
 })

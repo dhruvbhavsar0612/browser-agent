@@ -67,53 +67,98 @@ export class McpClientError extends Error {
     message: string,
     readonly code: McpHealthErrorCode,
     readonly cause?: unknown,
+    readonly action?: string,
   ) {
     super(message)
     this.name = 'McpClientError'
   }
 }
 
+const BEARER_CREDENTIAL = /\bbearer\s+[a-z0-9\-._~+/]+=*/gi
+const SENSITIVE_PARAMETER =
+  /([?&](?:access_token|refresh_token|token|api[_-]?key|client_secret)=)[^&#\s]+/gi
+const SENSITIVE_HEADER =
+  /(\b(?:authorization|proxy-authorization|access_token|refresh_token|token|api[_-]?key|client_secret)\b\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi
+
+function redactMcpErrorDetail(value: string): string {
+  return value
+    .replace(BEARER_CREDENTIAL, 'Bearer [REDACTED]')
+    .replace(SENSITIVE_PARAMETER, '$1[REDACTED]')
+    .replace(SENSITIVE_HEADER, '$1[REDACTED]')
+}
+
 function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return typeof error === 'string' ? error : String(error)
+  const value = error instanceof Error ? error.message : typeof error === 'string' ? error : String(error)
+  return redactMcpErrorDetail(value)
+}
+
+function httpStatus(error: unknown, message: string): number | undefined {
+  if (
+    (error instanceof StreamableHTTPError || error instanceof SseError) &&
+    typeof error.code === 'number'
+  ) {
+    return error.code
+  }
+  const match = message.match(/\b(?:http|status|error)\s*(?:code)?\s*[:(]?\s*(401|403|404|405|406|415|501)\b/i)
+  return match?.[1] ? Number(match[1]) : undefined
 }
 
 function classifyError(error: unknown): McpClientError {
   if (error instanceof McpClientError) return error
   const message = formatError(error)
   const lower = message.toLowerCase()
+  const status = httpStatus(error, message)
   if (
     error instanceof UnauthorizedError ||
-    /\b(?:401|403)\b/.test(message) ||
+    status === 401 ||
+    status === 403 ||
     lower.includes('unauthorized') ||
     lower.includes('oauth')
   ) {
     return new McpClientError(
-      `Authentication required or expired. Connect OAuth or update the server credential. (${message})`,
+      'Authentication is required, expired, or lacks the requested access.',
       'auth',
       error,
+      'Save a valid bearer/API credential or reconnect OAuth, then test the server again.',
     )
   }
   if (lower.includes('cors') || lower.includes('access-control-allow-origin')) {
     return new McpClientError(
-      `The MCP server blocked this extension with CORS. Allow the extension origin and MCP request headers. (${message})`,
+      'The MCP endpoint blocked this extension request with CORS.',
       'cors',
       error,
+      'Allow the extension origin and the Authorization, Content-Type, MCP-Protocol-Version, and Mcp-Session-Id request headers on the MCP endpoint.',
     )
-  }
-  if (error instanceof StreamableHTTPError || error instanceof SseError) {
-    return new McpClientError(`Remote MCP transport failed: ${message}`, 'transport', error)
   }
   if (
     lower.includes('failed to fetch') ||
     lower.includes('networkerror') ||
     lower.includes('econnrefused') ||
-    lower.includes('dns')
+    lower.includes('dns') ||
+    lower.includes('enotfound') ||
+    lower.includes('timed out')
   ) {
     return new McpClientError(
-      `Could not reach the MCP server. Check its URL, network access, and CORS policy. (${message})`,
+      'The MCP endpoint could not be reached.',
       'network',
       error,
+      'Verify the HTTPS URL, DNS/network access, and that the extension has host permission for the endpoint.',
+    )
+  }
+  if (error instanceof StreamableHTTPError || error instanceof SseError) {
+    if (status !== undefined && status >= 500) {
+      return new McpClientError(
+        'The remote MCP server returned an internal error.',
+        'server',
+        error,
+        'Retry later or check the remote MCP server status.',
+      )
+    }
+    return new McpClientError(
+      'The MCP endpoint does not support the selected transport.',
+      'transport',
+      error,
+      'Use Auto only when the endpoint may support legacy SSE; otherwise select the transport documented by the server.',
     )
   }
   if (
@@ -123,29 +168,26 @@ function classifyError(error: unknown): McpClientError {
     lower.includes('parse')
   ) {
     return new McpClientError(
-      `The endpoint did not complete a compatible MCP ${MCP_PROTOCOL_VERSION} handshake. (${message})`,
+      `The endpoint did not complete a compatible MCP ${MCP_PROTOCOL_VERSION} handshake.`,
       'protocol',
       error,
+      'Confirm that the URL is the remote MCP endpoint rather than a provider web page or API root.',
     )
   }
-  return new McpClientError(`Remote MCP server error: ${message}`, 'server', error)
+  return new McpClientError(
+    'The remote MCP server returned an unexpected error.',
+    'server',
+    error,
+    'Retry the request and inspect the sanitized diagnostic detail if the problem persists.',
+  )
 }
 
 function shouldFallBackToSse(error: unknown): boolean {
-  if (error instanceof UnauthorizedError) return false
-  if (error instanceof StreamableHTTPError) {
-    return error.code === undefined || [400, 404, 405, 406, 415].includes(error.code)
-  }
-  const message = formatError(error).toLowerCase()
-  if (message.includes('401') || message.includes('403') || message.includes('oauth')) return false
-  return (
-    message.includes('404') ||
-    message.includes('405') ||
-    message.includes('unsupported media') ||
-    message.includes('method not allowed') ||
-    message.includes('failed to fetch') ||
-    message.includes('network')
-  )
+  if (!(error instanceof StreamableHTTPError)) return false
+  // A fallback is safe only when the endpoint explicitly rejects Streamable
+  // HTTP negotiation. Never retry a credential, CORS, or network failure as
+  // legacy SSE: that masks the actionable root cause and creates extra traffic.
+  return [404, 405, 406, 415, 501].includes(error.code ?? -1)
 }
 
 function configFingerprint(server: McpServerConfig): string {
@@ -230,7 +272,12 @@ export class RemoteMcpRegistry {
         error: {
           code: healthError.code,
           message: healthError.message,
-          detail: formatError(healthError.cause),
+          action:
+            healthError.action ??
+            'Check the MCP server configuration and retry the connection test.',
+          ...(healthError.cause === undefined
+            ? {}
+            : { detail: formatError(healthError.cause) }),
         },
       }
     } finally {
@@ -522,6 +569,7 @@ export class RemoteMcpRegistry {
           fingerprint,
         }
         this.connections.set(serverId, connection)
+        this.observeTransportClose(serverId, connection)
         return connection
       } catch (error) {
         firstError ??= error
@@ -617,6 +665,24 @@ export class RemoteMcpRegistry {
     if (!connection) return
     if (connection.idleTimer) clearTimeout(connection.idleTimer)
     connection.idleTimer = setTimeout(() => void this.close(serverId), this.idleMs)
+  }
+
+  /**
+   * A remote transport can close independently of the MV3 service worker.
+   * Forget it immediately so the next request creates a fresh transport and
+   * loads the same credential material from the encrypted vault.
+   */
+  private observeTransportClose(serverId: string, connection: Connection): void {
+    const previousOnClose = connection.transport.onclose
+    connection.transport.onclose = () => {
+      try {
+        previousOnClose?.()
+      } finally {
+        if (this.connections.get(serverId) !== connection) return
+        this.connections.delete(serverId)
+        if (connection.idleTimer) clearTimeout(connection.idleTimer)
+      }
+    }
   }
 
   private async collectPages<T>(

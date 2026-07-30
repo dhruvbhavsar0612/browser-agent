@@ -164,4 +164,89 @@ describe('remote MCP message handlers', () => {
     expect((imported.payload as { id: string }).id).toBe('official-docs')
     expect((await config.get()).mcp['official-docs']?.provenance?.provider).toBe('official-mcp')
   })
+
+  it('falls back to a watched authorization tab when the identity callback fails', async () => {
+    const sessionState: Record<string, unknown> = {}
+    const updatedListeners = new Set<
+      (
+        tabId: number,
+        changeInfo: chrome.tabs.TabChangeInfo,
+        tab: chrome.tabs.Tab,
+      ) => void
+    >()
+    const removedListeners = new Set<(tabId: number) => void>()
+    vi.stubGlobal('chrome', {
+      runtime: { lastError: { message: 'Identity flow is unavailable' } },
+      identity: {
+        getRedirectURL: vi.fn(() => 'https://extension.chromiumapp.org/mcp'),
+        launchWebAuthFlow: vi.fn((_options, callback) => callback(undefined)),
+      },
+      storage: {
+        session: {
+          get: vi.fn(async (key: string) => ({ [key]: sessionState[key] })),
+          set: vi.fn(async (value: Record<string, unknown>) => Object.assign(sessionState, value)),
+        },
+      },
+      tabs: {
+        create: vi.fn(async () => ({ id: 42 })),
+        remove: vi.fn(async () => undefined),
+        onUpdated: {
+          addListener: vi.fn((listener) => updatedListeners.add(listener)),
+          removeListener: vi.fn((listener) => updatedListeners.delete(listener)),
+        },
+        onRemoved: {
+          addListener: vi.fn((listener) => removedListeners.add(listener)),
+          removeListener: vi.fn((listener) => removedListeners.delete(listener)),
+        },
+      },
+    })
+
+    const oauthRegistry = {
+      ...registry,
+      beginOAuth: vi.fn().mockResolvedValue({
+        authorizationUrl: 'https://auth.example/authorize?state=test-state',
+        state: 'test-state',
+      }),
+      completeOAuth: vi.fn().mockResolvedValue({
+        ok: true,
+        serverId: 'oauth',
+        checkedAt: 1,
+      }),
+    } as unknown as RemoteMcpRegistry
+    const oauthBus = createMessageBus()
+    registerMcpHandlers(oauthBus, { config, vault, registry: oauthRegistry, marketplace })
+
+    const response = await dispatchMcpMessage(
+      oauthBus,
+      createRequest('mcp.oauth.connect', { id: 'oauth' }),
+    )
+
+    expect(response.payload).toEqual({ ok: true, pending: true, manual: true })
+    expect(chrome.tabs.create).toHaveBeenCalledWith({
+      url: 'https://auth.example/authorize?state=test-state',
+      active: true,
+    })
+    expect(updatedListeners).toHaveLength(1)
+
+    for (const listener of updatedListeners) {
+      listener(
+        42,
+        { url: 'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state' },
+        { id: 42, url: 'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state' },
+      )
+    }
+    await vi.waitFor(() => {
+      expect(oauthRegistry.completeOAuth).toHaveBeenCalledWith(
+        'oauth',
+        'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state',
+        'https://extension.chromiumapp.org/mcp',
+      )
+    })
+
+    expect(chrome.tabs.remove).toHaveBeenCalledWith(42)
+    expect(sessionState['browser-agent.mcp-oauth-pending']).toEqual({})
+    expect(JSON.stringify(sessionState)).not.toContain('test-code')
+    expect(removedListeners).toHaveLength(0)
+    vi.unstubAllGlobals()
+  })
 })

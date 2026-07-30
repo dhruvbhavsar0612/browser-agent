@@ -16,7 +16,9 @@ Browser Agent supports remote MCP servers from MV3 without a stdio path.
   or compaction while retaining errors, URLs, text summaries, structured content, and origin
   metadata.
 - `packages/extension/src/background/handlers/mcp.ts` provides typed CRUD, health, discovery,
-  credentials, OAuth, resources, and marketplace messages.
+  credentials, OAuth, resources, and marketplace messages. It prefers
+  `chrome.identity.launchWebAuthFlow`, with a persisted, watched authorization-tab callback fallback
+  when identity flow is unavailable.
 - `packages/extension/src/sidepanel/RemoteMcpSettings.tsx` provides direct URL configuration,
   authentication, status, discovery/tool filtering, and Official MCP Registry import.
 
@@ -28,7 +30,41 @@ synced configuration.
 Discovery snapshots are local cache entries with server/version/protocol timestamps. They allow a
 restarted service worker to expose known tools immediately. Missing caches trigger on-demand
 discovery. Connections are lazy, closed after idle, and all run connections close when an agent
-run finishes or the worker suspends.
+run finishes or the worker suspends. A remote transport close is forgotten immediately, so the next
+request creates a fresh connection. OAuth providers and manual credentials are reloaded from the
+vault; the MCP SDK refreshes OAuth access tokens after an authorization challenge. Idle or service
+worker shutdown never deletes vault entries.
+
+## Preset authentication matrix
+
+The preset `authMode` is the creation default. `authStrategy` is additive metadata for callers that
+need to explain the supported choices; it contains no credential values.
+
+| Preset | Default / preferred mode | Allowed alternative | Operational guidance |
+| --- | --- | --- | --- |
+| Context7 Docs | `none` | `api-key` | Start anonymously. If Context7 supplies a higher-limit credential, store it only as a vault API-key secret. |
+| GitHub | `bearer` | `oauth` | Preferred: a least-privilege GitHub fine-grained PAT saved as a bearer vault credential. Use OAuth only when the selected GitHub MCP deployment explicitly supports it. |
+| Linear | `oauth` | — | Connect with OAuth and approve the required workspace access. |
+| Notion | `oauth` | — | Connect with OAuth and approve the required workspace access. |
+| Sentry | `oauth` | `bearer`, `api-key` | Prefer OAuth; for a provider-documented token deployment, save the credential in the vault. |
+| Custom Remote MCP | `none` | `bearer`, `api-key`, `oauth` | Select only the provider-documented mode and keep manual credentials in the vault. |
+
+## Health and transport behavior
+
+`McpHealth.error.code` is a stable category and `error.action` gives the next corrective step.
+`error.detail`, when present, is sanitized before it is returned.
+
+| Code | Meaning | Corrective action |
+| --- | --- | --- |
+| `auth` | Credential missing, expired, or unauthorized | Save a valid bearer/API credential or reconnect OAuth. |
+| `cors` | The endpoint explicitly blocked the extension request | Allow the extension origin and MCP request headers. |
+| `network` | DNS, connection, or fetch reachability failure | Verify the HTTPS endpoint, network path, and extension host permission. |
+| `transport` | The selected protocol is unsupported by the endpoint | Use the provider's protocol; use Auto only for possible legacy SSE endpoints. |
+| `protocol` | The endpoint did not complete an MCP handshake | Use the provider's MCP endpoint, not its web page or API root. |
+
+Auto transport starts with Streamable HTTP and tries legacy SSE only after an explicit
+Streamable-HTTP negotiation rejection (`404`, `405`, `406`, `415`, or `501`). It never retries
+authentication, CORS, DNS/network, or generic server failures as SSE.
 
 ## Live smoke test
 
@@ -46,3 +82,72 @@ pnpm smoke:mcp
 Review server annotations before selecting `MCP_TEST_TOOL`. The script refuses tools that are not
 explicitly safe read-only. A reviewed tool that is read-only and non-destructive but marked
 `openWorldHint` can be called only with the explicit `MCP_TEST_ALLOW_OPEN_WORLD=1` opt-in.
+
+## Extension service-worker live smoke
+
+The following checks exercise the MV3 background service worker, not the standalone smoke script.
+Do not put a credential in a shell command, source file, devtools snippet, or issue comment.
+
+1. Build the extension, open `chrome://extensions`, enable Developer mode, and load unpacked
+   `packages/extension/dist`.
+
+   ```sh
+   pnpm --filter @browser-agent/extension build
+   ```
+
+2. Click the extension's **service worker** link on `chrome://extensions`. In that worker's
+   DevTools Console, define this message helper:
+
+   ```js
+   const mcp = (type, payload) =>
+     chrome.runtime.sendMessage({ id: crypto.randomUUID(), type, payload })
+   ```
+
+### Context7 anonymous smoke
+
+Create a temporary anonymous server through the real background message handler, then test and
+discover it. Do not call a remote tool in this smoke.
+
+```js
+await mcp('mcp.server.create', {
+  id: 'context7-sw-smoke',
+  server: {
+    type: 'remote',
+    name: 'Context7 service-worker smoke',
+    url: 'https://mcp.context7.com/mcp',
+    transport: 'streamable-http',
+    enabled: true,
+    headers: {},
+    auth: { mode: 'none' },
+    tools: {},
+  },
+})
+await mcp('mcp.server.test', { id: 'context7-sw-smoke' })
+await mcp('mcp.server.discover', { id: 'context7-sw-smoke' })
+```
+
+Expect `ok: true`, `transport: 'streamable-http'`, and a discovery response. Then stop the
+service worker from `chrome://extensions` and repeat `mcp.server.test`; it should wake a fresh
+worker and reconnect. Remove the temporary server when finished:
+
+```js
+await mcp('mcp.server.delete', { id: 'context7-sw-smoke' })
+```
+
+### GitHub bearer/PAT smoke
+
+1. Add the GitHub preset in the existing Remote MCP settings. It defaults to **Bearer**.
+2. In its password field, enter a least-privilege fine-grained PAT manually and save it. Never
+   paste the PAT into DevTools or the commands below.
+3. In the service-worker Console, run only non-secret background requests:
+
+   ```js
+   await mcp('mcp.server.test', { id: 'github-official' })
+   await mcp('mcp.server.discover', { id: 'github-official' })
+   ```
+
+Expect a successful health response and discovery. Stop the service worker in
+`chrome://extensions`, reopen its Console, redefine `mcp`, and repeat `mcp.server.test`. The
+saved bearer credential must still be listed only as an `api` vault entry by
+`mcp.server.list`, never in response data. Remove the temporary GitHub server or use the explicit
+credential removal control when the test is complete.

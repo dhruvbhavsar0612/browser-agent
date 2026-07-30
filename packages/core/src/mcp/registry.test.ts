@@ -189,15 +189,144 @@ describe('RemoteMcpRegistry', () => {
     await config.set({
       mcp: { mock: { transport: 'auto', auth: { mode: 'bearer' } } },
     })
+    await vault.setMcp('mock', 'test-bearer-credential', 'api')
     const attempts: string[] = []
     const registry = new RemoteMcpRegistry(config, vault, storage, {
       connectionFactory: async ({ kind }) => {
         attempts.push(kind)
-        throw new Error('401 Unauthorized')
+        throw new StreamableHTTPError(401, 'Unauthorized')
       },
     })
     const health = await registry.testConnection('mock')
     expect(health).toMatchObject({ ok: false, error: { code: 'auth' } })
-    expect(attempts).toEqual([])
+    expect(attempts).toEqual(['streamable-http'])
+  })
+
+  it('does not fall back to SSE for an unreachable Streamable HTTP endpoint', async () => {
+    const { storage, config, vault } = await setup()
+    await config.set({ mcp: { mock: { transport: 'auto' } } })
+    const attempts: string[] = []
+    const registry = new RemoteMcpRegistry(config, vault, storage, {
+      connectionFactory: async ({ kind }) => {
+        attempts.push(kind)
+        throw new Error('Failed to fetch')
+      },
+    })
+
+    const health = await registry.testConnection('mock')
+
+    expect(health).toMatchObject({
+      ok: false,
+      error: {
+        code: 'network',
+        action: expect.stringContaining('HTTPS URL'),
+      },
+    })
+    expect(attempts).toEqual(['streamable-http'])
+  })
+
+  it('returns stable actionable health categories without exposing credentials', async () => {
+    const { storage, config, vault } = await setup()
+    const cases: Array<{
+      error: Error
+      code: 'auth' | 'cors' | 'network' | 'transport'
+      action: string
+    }> = [
+      {
+        error: new StreamableHTTPError(401, 'Authorization: Bearer test-health-value'),
+        code: 'auth',
+        action: 'Save a valid bearer/API credential',
+      },
+      {
+        error: new Error('CORS blocked Authorization: Bearer test-health-value'),
+        code: 'cors',
+        action: 'Allow the extension origin',
+      },
+      {
+        error: new Error('Failed to fetch'),
+        code: 'network',
+        action: 'Verify the HTTPS URL',
+      },
+      {
+        error: new StreamableHTTPError(415, 'Unsupported Media Type'),
+        code: 'transport',
+        action: 'Use Auto only',
+      },
+    ]
+
+    for (const { error, code, action } of cases) {
+      const registry = new RemoteMcpRegistry(config, vault, storage, {
+        connectionFactory: async () => {
+          throw error
+        },
+      })
+      const health = await registry.testConnection('mock')
+      expect(health).toMatchObject({
+        ok: false,
+        error: { code, action: expect.stringContaining(action) },
+      })
+      expect(JSON.stringify(health)).not.toContain('test-health-value')
+    }
+  })
+
+  it('reconnects after idle close and rereads a vaulted bearer credential after a worker restart', async () => {
+    vi.useFakeTimers()
+    try {
+      const storage = createMemoryStorage()
+      const config = new ConfigService(storage)
+      const vault = new CredentialVault(storage)
+      await config.set({
+        mcp: {
+          retained: {
+            url: 'https://mcp.example.test/mcp',
+            transport: 'streamable-http',
+            auth: { mode: 'bearer' },
+          },
+        },
+      })
+      await vault.setMcp('retained', 'test-retained-credential', 'api')
+
+      const headersSeen: Array<Record<string, string>> = []
+      const makeRegistry = () =>
+        new RemoteMcpRegistry(config, vault, storage, {
+          idleMs: 10,
+          connectionFactory: async ({ headers }) => {
+            headersSeen.push(headers)
+            const transport = {
+              close: vi.fn(async () => {
+                transport.onclose?.()
+              }),
+            } as unknown as Transport
+            return {
+              client: {
+                ping: vi.fn().mockResolvedValue({}),
+                getServerVersion: () => ({ name: 'retained', version: '1.0.0' }),
+              } as unknown as Client,
+              transport,
+            }
+          },
+        })
+
+      const registry = makeRegistry()
+      expect((await registry.testConnection('retained')).ok).toBe(true)
+      await vi.advanceTimersByTimeAsync(10)
+      expect(headersSeen).toHaveLength(1)
+
+      expect((await registry.testConnection('retained')).ok).toBe(true)
+      expect(headersSeen).toHaveLength(2)
+
+      const restartedWorkerRegistry = makeRegistry()
+      expect((await restartedWorkerRegistry.testConnection('retained')).ok).toBe(true)
+      expect(headersSeen).toHaveLength(3)
+      expect(headersSeen).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ Authorization: 'Bearer test-retained-credential' }),
+        ]),
+      )
+      expect((await vault.getMcp('retained', 'api'))?.secret).toBe('test-retained-credential')
+      await Promise.all([registry.closeAll(), restartedWorkerRegistry.closeAll()])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

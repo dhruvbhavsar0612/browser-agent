@@ -164,6 +164,11 @@ export const CompactionConfig = z.object({
 })
 export type CompactionConfig = z.infer<typeof CompactionConfig>
 
+export const SettingsConfig = z.object({
+  developerMode: z.boolean().default(false),
+})
+export type SettingsConfig = z.infer<typeof SettingsConfig>
+
 export const AppConfig = z
   .object({
     model: z.string().optional(),
@@ -179,6 +184,7 @@ export const AppConfig = z
       recentTurns: 6,
       maxToolResultChars: 12_000,
     }),
+    settings: SettingsConfig.default({ developerMode: false }),
     executionMode: z.enum(['plan', 'approval', 'auto']).default('approval'),
   })
   .superRefine((config, ctx) => {
@@ -216,12 +222,15 @@ export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools'>> & {
   tools?: Record<string, Partial<McpToolConfig>>
 }
 
-export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider' | 'mcp'> & {
+export type SettingsConfigPatch = Partial<SettingsConfig>
+
+export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider' | 'mcp' | 'settings'> & {
   /** null explicitly clears the default across JSON/chrome messaging boundaries. */
   model?: string | null
   provider?: Record<string, ProviderConfigPatch>
   /** A null server removes it. Other entries merge to preserve per-tool choices. */
   mcp?: Record<string, McpServerConfigPatch | null>
+  settings?: SettingsConfigPatch
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -352,6 +361,9 @@ Restrictions:
     recentTurns: 6,
     maxToolResultChars: 12_000,
   },
+  settings: {
+    developerMode: false,
+  },
   executionMode: 'approval',
 }
 
@@ -432,5 +444,6 @@ export function mergeConfig(base: AppConfig, override: AppConfigPatch): AppConfi
     mcp: mergeMcp(base.mcp, override.mcp),
     compaction: { ...base.compaction, ...override.compaction },
     permission: override.permission ?? base.permission,
+    settings: { ...base.settings, ...override.settings },
   })
 }

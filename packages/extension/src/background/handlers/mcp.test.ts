@@ -232,7 +232,10 @@ describe('remote MCP message handlers', () => {
       listener(
         42,
         { url: 'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state' },
-        { id: 42, url: 'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state' },
+        {
+          id: 42,
+          url: 'https://extension.chromiumapp.org/mcp?code=test-code&state=test-state',
+        } as chrome.tabs.Tab,
       )
     }
     await vi.waitFor(() => {

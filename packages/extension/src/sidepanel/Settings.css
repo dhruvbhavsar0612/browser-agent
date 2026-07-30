@@ -56,7 +56,9 @@
   font-size: 13px;
   color: var(--muted);
   cursor: pointer;
-  transition: color var(--motion-fast), background var(--motion-fast);
+  transition:
+    color var(--motion-fast),
+    background var(--motion-fast);
 }
 
 .settings-nav-item:hover {

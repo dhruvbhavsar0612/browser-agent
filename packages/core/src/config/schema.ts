@@ -435,13 +435,20 @@ function mergeMcp(base: AppConfig['mcp'], patch: AppConfigPatch['mcp']): AppConf
     const current = base[serverId]
     const authPatch = serverPatch.auth
     const { oauth: requestedOAuthClient, ...authWithoutOAuth } = authPatch ?? {}
+    const { oauth: existingOAuthClient, ...currentAuthWithoutOAuth } = current?.auth ?? {}
     const oauthClient =
-      requestedOAuthClient === null ? undefined : requestedOAuthClient ?? current?.auth.oauth
+      requestedOAuthClient === null
+        ? undefined
+        : requestedOAuthClient ?? existingOAuthClient
     merged[serverId] = McpServerConfig.parse({
       ...current,
       ...serverPatch,
       headers: serverPatch.headers ?? current?.headers ?? {},
-      auth: { ...current?.auth, ...authWithoutOAuth, ...(oauthClient ? { oauth: oauthClient } : {}) },
+      auth: {
+        ...currentAuthWithoutOAuth,
+        ...authWithoutOAuth,
+        ...(oauthClient ? { oauth: oauthClient } : {}),
+      },
       tools: { ...current?.tools, ...serverPatch.tools },
     })
   }

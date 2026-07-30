@@ -47,8 +47,32 @@ export interface McpDiscovery {
   warnings?: string[]
 }
 
-export type McpHealthErrorCode =
-  'auth' | 'cors' | 'network' | 'protocol' | 'transport' | 'configuration' | 'server'
+/**
+ * Stable, category-level health codes. Consumers may use these values for
+ * display, retry policy, and diagnostics without parsing a server error.
+ */
+export const MCP_HEALTH_ERROR_CODES = [
+  'auth',
+  'cors',
+  'network',
+  'protocol',
+  'transport',
+  'configuration',
+  'oauth-redirect',
+  'server',
+] as const
+
+export type McpHealthErrorCode = (typeof MCP_HEALTH_ERROR_CODES)[number]
+
+export interface McpHealthError {
+  code: McpHealthErrorCode
+  /** User-facing explanation that does not contain credentials. */
+  message: string
+  /** Concrete next step for the current failure category. */
+  action: string
+  /** Sanitized implementation detail for diagnostics. */
+  detail?: string
+}
 
 export interface McpHealth {
   ok: boolean
@@ -58,7 +82,7 @@ export interface McpHealth {
   serverVersion?: { name: string; version: string }
   protocolVersion?: string
   latencyMs?: number
-  error?: { code: McpHealthErrorCode; message: string; detail?: string }
+  error?: McpHealthError
 }
 
 export interface NormalizedMcpToolResult {

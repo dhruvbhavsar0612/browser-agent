@@ -86,6 +86,15 @@ export const AgentConfig = z.object({
 export type AgentConfig = z.infer<typeof AgentConfig>
 
 const SECRET_HEADER_NAME = /^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token)$/i
+const SENSITIVE_OAUTH_REDIRECT_QUERY_NAMES = new Set([
+  'client_secret',
+  'secret',
+  'token',
+  'access_token',
+  'refresh_token',
+  'password',
+  'api_key',
+])
 
 export function isSecureRemoteUrl(value: string): boolean {
   try {
@@ -100,16 +109,56 @@ export function isSecureRemoteUrl(value: string): boolean {
   }
 }
 
+/**
+ * OAuth redirect URIs are public configuration. Keep credentials and callback
+ * response data out of that durable storage; the callback URL itself is only
+ * accepted later as transient OAuth completion input.
+ */
+export function isSafeOAuthRedirectUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (!isSecureRemoteUrl(value) || url.username || url.password || value.includes('#')) {
+      return false
+    }
+
+    return [...url.searchParams.keys()].every(
+      (name) => !SENSITIVE_OAUTH_REDIRECT_QUERY_NAMES.has(name.toLowerCase().replaceAll('-', '_')),
+    )
+  } catch {
+    return false
+  }
+}
+
 export const McpToolConfig = z.object({
   enabled: z.boolean().default(true),
 })
 export type McpToolConfig = z.infer<typeof McpToolConfig>
+
+/**
+ * A provider-registered public OAuth client. Client secrets are deliberately
+ * unsupported: extension configuration syncs, while OAuth tokens stay vaulted.
+ */
+export const McpOAuthPublicClientConfig = z
+  .object({
+    clientId: z.string().min(1).max(2_048),
+    redirectUrl: z
+      .string()
+      .url()
+      .refine(
+        isSafeOAuthRedirectUrl,
+        'OAuth redirect URL must use HTTPS (HTTP is allowed for localhost only) and cannot contain userinfo, a fragment, or sensitive query parameters',
+      ),
+  })
+  .strict()
+export type McpOAuthPublicClientConfig = z.infer<typeof McpOAuthPublicClientConfig>
 
 export const McpAuthConfig = z
   .object({
     mode: z.enum(['none', 'bearer', 'api-key', 'oauth']).default('none'),
     /** Header name only. Its value always lives in the encrypted MCP vault namespace. */
     headerName: z.string().min(1).max(128).optional(),
+    /** A non-secret client ID and redirect URI already registered with the provider. */
+    oauth: McpOAuthPublicClientConfig.optional(),
   })
   .default({ mode: 'none' })
 export type McpAuthConfig = z.infer<typeof McpAuthConfig>
@@ -212,8 +261,12 @@ export type ProviderConfigPatch = Partial<Omit<ProviderConfig, 'api' | 'models' 
   models?: Record<string, Partial<ProviderModelConfig>>
 }
 
-export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools'>> & {
+export type McpServerConfigPatch = Partial<Omit<McpServerConfig, 'tools' | 'auth'>> & {
   tools?: Record<string, Partial<McpToolConfig>>
+  auth?: Partial<Omit<McpAuthConfig, 'oauth'>> & {
+    /** Null removes a previously configured public OAuth client. */
+    oauth?: McpOAuthPublicClientConfig | null
+  }
 }
 
 export type AppConfigPatch = Omit<Partial<AppConfig>, 'model' | 'provider' | 'mcp'> & {
@@ -409,11 +462,22 @@ function mergeMcp(base: AppConfig['mcp'], patch: AppConfigPatch['mcp']): AppConf
       continue
     }
     const current = base[serverId]
+    const authPatch = serverPatch.auth
+    const { oauth: requestedOAuthClient, ...authWithoutOAuth } = authPatch ?? {}
+    const { oauth: existingOAuthClient, ...currentAuthWithoutOAuth } = current?.auth ?? {}
+    const oauthClient =
+      requestedOAuthClient === null
+        ? undefined
+        : requestedOAuthClient ?? existingOAuthClient
     merged[serverId] = McpServerConfig.parse({
       ...current,
       ...serverPatch,
       headers: serverPatch.headers ?? current?.headers ?? {},
-      auth: { ...current?.auth, ...serverPatch.auth },
+      auth: {
+        ...currentAuthWithoutOAuth,
+        ...authWithoutOAuth,
+        ...(oauthClient ? { oauth: oauthClient } : {}),
+      },
       tools: { ...current?.tools, ...serverPatch.tools },
     })
   }

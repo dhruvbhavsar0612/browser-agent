@@ -85,6 +85,92 @@ describe('config schema', () => {
     expect(mergeConfig(patched, { mcp: { docs: null } }).mcp.docs).toBeUndefined()
   })
 
+  it('keeps only public OAuth client configuration in synced MCP settings', () => {
+    const configured = mergeConfig(DEFAULT_CONFIG, {
+      mcp: {
+        oauth: {
+          url: 'https://mcp.example.com/mcp',
+          auth: {
+            mode: 'oauth',
+            oauth: {
+              clientId: 'provider-public-client',
+              redirectUrl: 'https://app.example.com/oauth/callback',
+            },
+          },
+        },
+      },
+    })
+    expect(configured.mcp.oauth?.auth.oauth).toEqual({
+      clientId: 'provider-public-client',
+      redirectUrl: 'https://app.example.com/oauth/callback',
+    })
+    expect(
+      mergeConfig(configured, {
+        mcp: { oauth: { auth: { oauth: null } } },
+      }).mcp.oauth?.auth.oauth,
+    ).toBeUndefined()
+  })
+
+  it('accepts only safe public OAuth redirect URIs', () => {
+    const oauthServer = (redirectUrl: string) => ({
+      mcp: {
+        oauth: {
+          url: 'https://mcp.example.com/mcp',
+          auth: {
+            mode: 'oauth' as const,
+            oauth: { clientId: 'provider-public-client', redirectUrl },
+          },
+        },
+      },
+    })
+
+    expect(mergeConfig(DEFAULT_CONFIG, oauthServer('https://app.example.com/oauth/callback')))
+      .toMatchObject({
+        mcp: {
+          oauth: {
+            auth: { oauth: { redirectUrl: 'https://app.example.com/oauth/callback' } },
+          },
+        },
+      })
+    expect(
+      mergeConfig(DEFAULT_CONFIG, oauthServer('http://localhost:8787/oauth/callback')),
+    ).toMatchObject({
+      mcp: {
+        oauth: {
+          auth: { oauth: { redirectUrl: 'http://localhost:8787/oauth/callback' } },
+        },
+      },
+    })
+
+    expect(() =>
+      mergeConfig(DEFAULT_CONFIG, oauthServer('https://user:secret@app.example.com/oauth/callback')),
+    ).toThrow(/userinfo/)
+    expect(() =>
+      mergeConfig(
+        DEFAULT_CONFIG,
+        oauthServer('https://app.example.com/oauth/callback#access_token=secret'),
+      ),
+    ).toThrow(/fragment/)
+
+    for (const name of [
+      'CLIENT_SECRET',
+      'SECRET',
+      'TOKEN',
+      'ACCESS_TOKEN',
+      'REFRESH_TOKEN',
+      'PASSWORD',
+      'API_KEY',
+      'api-key',
+    ]) {
+      expect(() =>
+        mergeConfig(
+          DEFAULT_CONFIG,
+          oauthServer(`https://app.example.com/oauth/callback?${name}=secret-value`),
+        ),
+      ).toThrow(/sensitive query parameters/)
+    }
+  })
+
   it('requires HTTPS except for localhost and rejects secret synced headers', () => {
     expect(() =>
       mergeConfig(DEFAULT_CONFIG, {

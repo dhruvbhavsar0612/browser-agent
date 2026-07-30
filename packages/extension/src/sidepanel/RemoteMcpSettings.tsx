@@ -69,6 +69,8 @@ export function RemoteMcpSettings() {
   const [tokens, setTokens] = useState<Record<string, string>>({})
   const [toolSearch, setToolSearch] = useState<Record<string, string>>({})
   const [health, setHealth] = useState<Record<string, McpHealth>>({})
+  const [pendingOAuth, setPendingOAuth] = useState<Record<string, boolean>>({})
+  const [oauthCallbacks, setOAuthCallbacks] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,6 +89,7 @@ export function RemoteMcpSettings() {
       servers?: ServerMap
       discoveries?: McpDiscovery[]
       credentials?: McpVaultListEntry[]
+      oauthPending?: Array<{ serverId: string; createdAt: number }>
     }
     const nextServers = payload.servers ?? {}
     setServers(nextServers)
@@ -94,6 +97,9 @@ export function RemoteMcpSettings() {
       Object.fromEntries((payload.discoveries ?? []).map((item) => [item.serverId, item])),
     )
     setCredentials(payload.credentials ?? [])
+    setPendingOAuth(
+      Object.fromEntries((payload.oauthPending ?? []).map((pending) => [pending.serverId, true])),
+    )
     setDrafts(
       Object.fromEntries(Object.entries(nextServers).map(([id, server]) => [id, toDraft(server)])),
     )
@@ -300,8 +306,36 @@ export function RemoteMcpSettings() {
   async function connectOAuth(id: string) {
     await run(`oauth:${id}`, async () => {
       const response = await request('mcp.oauth.connect', { id })
+      const result = response.payload as { health?: McpHealth; pending?: boolean; manual?: boolean }
+      if (result.health) setHealth((current) => ({ ...current, [id]: result.health! }))
+      if (result.pending && result.manual) {
+        setPendingOAuth((current) => ({ ...current, [id]: true }))
+      }
+      await load()
+    })
+  }
+
+  async function completeOAuth(id: string) {
+    const callbackUrl = oauthCallbacks[id]?.trim()
+    if (!callbackUrl) {
+      setError('Paste the complete OAuth callback URL before completing authorization')
+      return
+    }
+    await run(`oauth:${id}`, async () => {
+      const response = await request('mcp.oauth.complete', { id, callbackUrl })
       const result = response.payload as { health?: McpHealth }
       if (result.health) setHealth((current) => ({ ...current, [id]: result.health! }))
+      setPendingOAuth((current) => ({ ...current, [id]: false }))
+      setOAuthCallbacks((current) => ({ ...current, [id]: '' }))
+      await load()
+    })
+  }
+
+  async function cancelOAuth(id: string) {
+    await run(`oauth:${id}`, async () => {
+      await request('mcp.oauth.cancel', { id })
+      setPendingOAuth((current) => ({ ...current, [id]: false }))
+      setOAuthCallbacks((current) => ({ ...current, [id]: '' }))
       await load()
     })
   }
@@ -689,19 +723,60 @@ export function RemoteMcpSettings() {
                           Uses protected-resource and authorization-server discovery, PKCE, resource
                           indicators, and encrypted refresh-token storage.
                         </p>
-                        <button
-                          className={`settings-btn ${hasOAuth ? 'settings-btn-danger' : 'settings-btn-primary'}`}
-                          type="button"
-                          onClick={() =>
-                            void (hasOAuth ? disconnectOAuth(id) : connectOAuth(id))
-                          }
-                        >
-                          {busy === `oauth:${id}`
-                            ? 'Working…'
-                            : hasOAuth
-                              ? 'Disconnect OAuth'
-                              : 'Connect OAuth'}
-                        </button>
+                        {pendingOAuth[id] ? (
+                          <>
+                            <p className="settings-hint">
+                              The authorization tab could not return automatically. Paste the complete
+                              callback URL from the provider before this authorization expires.
+                            </p>
+                            <input
+                              className="settings-input"
+                              type="text"
+                              autoComplete="off"
+                              aria-label={`${id} OAuth callback URL`}
+                              placeholder="Paste the complete callback URL"
+                              value={oauthCallbacks[id] ?? ''}
+                              onChange={(event) =>
+                                setOAuthCallbacks((current) => ({
+                                  ...current,
+                                  [id]: event.target.value,
+                                }))
+                              }
+                            />
+                            <div className="settings-row">
+                              <button
+                                className="settings-btn settings-btn-primary"
+                                type="button"
+                                disabled={Boolean(busy) || !oauthCallbacks[id]?.trim()}
+                                onClick={() => void completeOAuth(id)}
+                              >
+                                {busy === `oauth:${id}` ? 'Completing…' : 'Complete OAuth'}
+                              </button>
+                              <button
+                                className="settings-btn settings-btn-danger"
+                                type="button"
+                                disabled={Boolean(busy)}
+                                onClick={() => void cancelOAuth(id)}
+                              >
+                                Cancel authorization
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <button
+                            className={`settings-btn ${hasOAuth ? 'settings-btn-danger' : 'settings-btn-primary'}`}
+                            type="button"
+                            onClick={() =>
+                              void (hasOAuth ? disconnectOAuth(id) : connectOAuth(id))
+                            }
+                          >
+                            {busy === `oauth:${id}`
+                              ? 'Working…'
+                              : hasOAuth
+                                ? 'Disconnect OAuth'
+                                : 'Connect OAuth'}
+                          </button>
+                        )}
                       </div>
                     ) : server.auth.mode === 'bearer' || server.auth.mode === 'api-key' ? (
                       <div className="settings-oauth">

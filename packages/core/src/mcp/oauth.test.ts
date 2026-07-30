@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ConfigService } from '../config/service.js'
 import { createMemoryStorage, VAULT_LOCAL_KEY } from '../config/storage.js'
 import { CredentialVault } from '../vault/vault.js'
+import { MCP_OAUTH_PENDING_TTL_MS, McpOAuthClientProvider } from './oauth.js'
 import { RemoteMcpRegistry } from './registry.js'
 
 describe('MCP OAuth 2.1', () => {
@@ -92,6 +93,8 @@ describe('MCP OAuth 2.1', () => {
     expect(tokenBodies[0]!.get('code')).toBe('test-code')
     expect(tokenBodies[0]!.get('code_verifier')?.length).toBeGreaterThan(40)
     expect(tokenBodies[0]!.get('resource')).toBe('https://mcp.example/mcp')
+    expect((await vault.getMcp('oauth', 'oauth'))?.secret).not.toContain('"state"')
+    expect((await vault.getMcp('oauth', 'oauth'))?.secret).not.toContain('"codeVerifier"')
 
     const encrypted = await storage.getLocal<unknown>(VAULT_LOCAL_KEY)
     expect(JSON.stringify(encrypted)).not.toContain('access-secret')
@@ -114,7 +117,12 @@ describe('MCP OAuth 2.1', () => {
     })
     await vault.setMcp(
       'oauth',
-      JSON.stringify({ state: 'expected', codeVerifier: 'verifier' }),
+      JSON.stringify({
+        state: 'expected',
+        codeVerifier: 'verifier',
+        pendingCreatedAt: Date.now(),
+        pendingRedirectUrl: 'https://extension.chromiumapp.org/mcp',
+      }),
       'oauth',
     )
     const fetchMock = vi.fn()
@@ -129,6 +137,73 @@ describe('MCP OAuth 2.1', () => {
       ),
     ).rejects.toThrow(/state mismatch/)
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('consumes OAuth state and PKCE once, and rejects expired or mismatched callbacks', async () => {
+    const storage = createMemoryStorage()
+    const vault = new CredentialVault(storage)
+    let now = 1_000
+    const createProvider = () =>
+      new McpOAuthClientProvider(
+        'oauth',
+        vault,
+        'https://extension.chromiumapp.org/mcp',
+        undefined,
+        { now: () => now, pendingTtlMs: MCP_OAUTH_PENDING_TTL_MS },
+      )
+
+    const mismatch = createProvider()
+    await mismatch.beginAuthorization()
+    const mismatchState = await mismatch.state()
+    await mismatch.saveCodeVerifier('mismatch-verifier')
+    await expect(
+      mismatch.consumePendingAuthorization(
+        'https://extension.chromiumapp.org/mcp?code=unused&state=wrong-state',
+      ),
+    ).rejects.toThrow(/state mismatch/)
+    expect(await mismatch.expectedState()).toBeUndefined()
+
+    const expired = createProvider()
+    await expired.beginAuthorization()
+    const expiredState = await expired.state()
+    await expired.saveCodeVerifier('expired-verifier')
+    now += MCP_OAUTH_PENDING_TTL_MS + 1
+    await expect(
+      expired.consumePendingAuthorization(
+        `https://extension.chromiumapp.org/mcp?code=unused&state=${expiredState}`,
+      ),
+    ).rejects.toThrow(/expired/)
+    expect(await expired.expectedState()).toBeUndefined()
+
+    now = 10_000
+    const replay = createProvider()
+    await replay.beginAuthorization()
+    const replayState = await replay.state()
+    await replay.saveCodeVerifier('one-time-verifier')
+    const callback = `https://extension.chromiumapp.org/mcp?code=unused&state=${replayState}`
+    await replay.consumePendingAuthorization(callback)
+    expect(await replay.codeVerifier()).toBe('one-time-verifier')
+    expect(await replay.expectedState()).toBeUndefined()
+    await expect(replay.consumePendingAuthorization(callback)).rejects.toThrow(/expired/)
+
+    const wrongRedirect = createProvider()
+    await wrongRedirect.beginAuthorization()
+    const redirectState = await wrongRedirect.state()
+    await wrongRedirect.saveCodeVerifier('redirect-verifier')
+    await expect(
+      wrongRedirect.consumePendingAuthorization(
+        `https://other.example/callback?code=unused&state=${redirectState}`,
+      ),
+    ).rejects.toThrow(/redirect URI/)
+    expect(await wrongRedirect.expectedState()).toBeUndefined()
+
+    const cancelled = createProvider()
+    await cancelled.beginAuthorization()
+    await cancelled.state()
+    await cancelled.saveCodeVerifier('cancelled-verifier')
+    await cancelled.clearPendingAuthorization()
+    expect(await cancelled.expectedState()).toBeUndefined()
+    await expect(cancelled.codeVerifier()).rejects.toThrow(/PKCE verifier is missing/)
   })
 
   it('refreshes OAuth after a service-worker restart without deleting the vaulted credential', async () => {

@@ -219,7 +219,7 @@ describe('RemoteMcpRegistry', () => {
       ok: false,
       error: {
         code: 'network',
-        action: expect.stringContaining('HTTPS URL'),
+        action: expect.stringContaining('does not distinguish'),
       },
     })
     expect(attempts).toEqual(['streamable-http'])
@@ -245,7 +245,7 @@ describe('RemoteMcpRegistry', () => {
       {
         error: new Error('Failed to fetch'),
         code: 'network',
-        action: 'Verify the HTTPS URL',
+        action: 'Browser fetch reports this same opaque failure',
       },
       {
         error: new StreamableHTTPError(415, 'Unsupported Media Type'),
@@ -325,6 +325,59 @@ describe('RemoteMcpRegistry', () => {
       )
       expect((await vault.getMcp('retained', 'api'))?.secret).toBe('test-retained-credential')
       await Promise.all([registry.closeAll(), restartedWorkerRegistry.closeAll()])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not idle-close a shared connection while a concurrent tool call still holds a lease', async () => {
+    vi.useFakeTimers()
+    try {
+      const storage = createMemoryStorage()
+      const config = new ConfigService(storage)
+      const vault = new CredentialVault(storage)
+      await config.set({
+        mcp: {
+          mock: {
+            url: 'https://mcp.example.test/mcp',
+            transport: 'streamable-http',
+          },
+        },
+      })
+      let startLongCall!: () => void
+      let completeLongCall!: (value: unknown) => void
+      const longCallStarted = new Promise<void>((resolve) => {
+        startLongCall = resolve
+      })
+      const longCall = new Promise<unknown>((resolve) => {
+        completeLongCall = resolve
+      })
+      const close = vi.fn().mockResolvedValue(undefined)
+      const transport = { close } as unknown as Transport
+      const client = {
+        ping: vi.fn().mockResolvedValue({}),
+        getServerVersion: () => ({ name: 'mock', version: '1.0.0' }),
+        callTool: vi.fn(() => {
+          startLongCall()
+          return longCall
+        }),
+      } as unknown as Client
+      const registry = new RemoteMcpRegistry(config, vault, storage, {
+        idleMs: 10,
+        connectionFactory: async () => ({ client, transport }),
+      })
+
+      const inFlight = registry.callTool('mock', 'lookup', { id: '42' })
+      await longCallStarted
+      expect((await registry.testConnection('mock')).ok).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(10)
+      expect(close).not.toHaveBeenCalled()
+
+      completeLongCall({ content: [{ type: 'text', text: 'Found 42' }] })
+      await expect(inFlight).resolves.toMatchObject({ summary: 'Found 42' })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(close).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
     }

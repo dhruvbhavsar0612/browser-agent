@@ -14,7 +14,7 @@ import type { ConfigService } from '../config/service.js'
 import { MCP_DISCOVERY_CACHE_KEY, type StorageAdapter } from '../config/storage.js'
 import type { McpServerConfig } from '../config/schema.js'
 import type { CredentialVault } from '../vault/index.js'
-import { McpOAuthClientProvider } from './oauth.js'
+import { MCP_OAUTH_PENDING_TTL_MS, McpOAuthClientProvider } from './oauth.js'
 import { normalizeMcpToolResult } from './result.js'
 import {
   MCP_PROTOCOL_VERSION,
@@ -35,6 +35,7 @@ interface Connection {
   transport: Transport
   kind: McpTransportKind
   fingerprint: string
+  activeLeases: number
   idleTimer?: ReturnType<typeof setTimeout>
 }
 
@@ -57,6 +58,7 @@ export interface RemoteMcpRegistryOptions {
   requestTimeoutMs?: number
   now?: () => number
   oauthRedirectUrl?: string | (() => string)
+  oauthPendingTtlMs?: number
   connectionFactory?: McpConnectionFactory
 }
 
@@ -124,10 +126,10 @@ function classifyError(error: unknown): McpClientError {
   }
   if (lower.includes('cors') || lower.includes('access-control-allow-origin')) {
     return new McpClientError(
-      'The MCP endpoint blocked this extension request with CORS.',
+      'The MCP endpoint reported an explicit CORS failure.',
       'cors',
       error,
-      'Allow the extension origin and the Authorization, Content-Type, MCP-Protocol-Version, and Mcp-Session-Id request headers on the MCP endpoint.',
+      'Allow the extension origin and the Authorization, Content-Type, MCP-Protocol-Version, and Mcp-Session-Id request headers on the MCP endpoint. Browser fetch failures without a CORS diagnostic are reported as network because the platform does not distinguish them.',
     )
   }
   if (
@@ -139,10 +141,10 @@ function classifyError(error: unknown): McpClientError {
     lower.includes('timed out')
   ) {
     return new McpClientError(
-      'The MCP endpoint could not be reached.',
+      'The browser could not reach the MCP endpoint.',
       'network',
       error,
-      'Verify the HTTPS URL, DNS/network access, and that the extension has host permission for the endpoint.',
+      'Browser fetch reports this same opaque failure for DNS, TLS, network, extension policy, and CORS blocks. Verify the HTTPS URL, DNS/TLS/network access, extension host permission, and the provider CORS policy.',
     )
   }
   if (error instanceof StreamableHTTPError || error instanceof SseError) {
@@ -250,18 +252,19 @@ export class RemoteMcpRegistry {
   async testConnection(serverId: string): Promise<McpHealth> {
     const started = this.now()
     try {
-      const connection = await this.getConnection(serverId)
-      await connection.client.ping({ timeout: this.requestTimeoutMs })
-      const version = connection.client.getServerVersion()
-      return {
-        ok: true,
-        serverId,
-        checkedAt: this.now(),
-        transport: connection.kind,
-        ...(version ? { serverVersion: version } : {}),
-        protocolVersion: this.protocolVersion(connection),
-        latencyMs: Math.max(0, this.now() - started),
-      }
+      return await this.withConnection(serverId, async (connection) => {
+        await connection.client.ping({ timeout: this.requestTimeoutMs })
+        const version = connection.client.getServerVersion()
+        return {
+          ok: true,
+          serverId,
+          checkedAt: this.now(),
+          transport: connection.kind,
+          ...(version ? { serverVersion: version } : {}),
+          protocolVersion: this.protocolVersion(connection),
+          latencyMs: Math.max(0, this.now() - started),
+        }
+      })
     } catch (error) {
       const healthError = classifyError(error)
       return {
@@ -280,73 +283,69 @@ export class RemoteMcpRegistry {
             : { detail: formatError(healthError.cause) }),
         },
       }
-    } finally {
-      this.scheduleClose(serverId)
     }
   }
 
   async discover(serverId: string): Promise<McpDiscovery> {
     const server = await this.requireServer(serverId)
-    const connection = await this.getConnection(serverId)
-    const capabilities = connection.client.getServerCapabilities()
-    const warnings: string[] = []
-
     try {
-      const tools = capabilities?.tools
-        ? await this.collectPages<McpDiscoveredTool>(async (cursor) => {
-            const page = await connection.client.listTools(cursor ? { cursor } : undefined, {
-              timeout: this.requestTimeoutMs,
+      return await this.withConnection(serverId, async (connection) => {
+        const capabilities = connection.client.getServerCapabilities()
+        const warnings: string[] = []
+        const tools = capabilities?.tools
+          ? await this.collectPages<McpDiscoveredTool>(async (cursor) => {
+              const page = await connection.client.listTools(cursor ? { cursor } : undefined, {
+                timeout: this.requestTimeoutMs,
+              })
+              return {
+                items: page.tools.map(normalizeTool),
+                nextCursor: page.nextCursor,
+              }
             })
-            return {
-              items: page.tools.map(normalizeTool),
-              nextCursor: page.nextCursor,
-            }
-          })
-        : []
+          : []
 
-      const resources = capabilities?.resources
-        ? await this.collectPages<McpDiscoveredResource>(async (cursor) => {
-            const page = await connection.client.listResources(cursor ? { cursor } : undefined, {
-              timeout: this.requestTimeoutMs,
+        const resources = capabilities?.resources
+          ? await this.collectPages<McpDiscoveredResource>(async (cursor) => {
+              const page = await connection.client.listResources(cursor ? { cursor } : undefined, {
+                timeout: this.requestTimeoutMs,
+              })
+              return { items: page.resources, nextCursor: page.nextCursor }
             })
-            return { items: page.resources, nextCursor: page.nextCursor }
-          })
-        : []
+          : []
 
-      const prompts = capabilities?.prompts
-        ? await this.collectPages<McpDiscoveredPrompt>(async (cursor) => {
-            const page = await connection.client.listPrompts(cursor ? { cursor } : undefined, {
-              timeout: this.requestTimeoutMs,
+        const prompts = capabilities?.prompts
+          ? await this.collectPages<McpDiscoveredPrompt>(async (cursor) => {
+              const page = await connection.client.listPrompts(cursor ? { cursor } : undefined, {
+                timeout: this.requestTimeoutMs,
+              })
+              return { items: page.prompts, nextCursor: page.nextCursor }
             })
-            return { items: page.prompts, nextCursor: page.nextCursor }
-          })
-        : []
+          : []
 
-      if (!capabilities?.tools) warnings.push('Server does not advertise tools')
-      if (!capabilities?.resources) warnings.push('Server does not advertise resources')
-      if (!capabilities?.prompts) warnings.push('Server does not advertise prompts')
+        if (!capabilities?.tools) warnings.push('Server does not advertise tools')
+        if (!capabilities?.resources) warnings.push('Server does not advertise resources')
+        if (!capabilities?.prompts) warnings.push('Server does not advertise prompts')
 
-      const version = connection.client.getServerVersion()
-      const discovery: McpDiscovery = {
-        serverId,
-        serverName: server.name ?? serverId,
-        ...(version ? { serverVersion: version } : {}),
-        protocolVersion: this.protocolVersion(connection),
-        transport: connection.kind,
-        discoveredAt: this.now(),
-        tools,
-        resources,
-        prompts,
-        ...(warnings.length ? { warnings } : {}),
-      }
-      const cache = await this.readCache()
-      cache[serverId] = discovery
-      await this.storage.setLocal(MCP_DISCOVERY_CACHE_KEY, cache)
-      return discovery
+        const version = connection.client.getServerVersion()
+        const discovery: McpDiscovery = {
+          serverId,
+          serverName: server.name ?? serverId,
+          ...(version ? { serverVersion: version } : {}),
+          protocolVersion: this.protocolVersion(connection),
+          transport: connection.kind,
+          discoveredAt: this.now(),
+          tools,
+          resources,
+          prompts,
+          ...(warnings.length ? { warnings } : {}),
+        }
+        const cache = await this.readCache()
+        cache[serverId] = discovery
+        await this.storage.setLocal(MCP_DISCOVERY_CACHE_KEY, cache)
+        return discovery
+      })
     } catch (error) {
       throw classifyError(error)
-    } finally {
-      this.scheduleClose(serverId)
     }
   }
 
@@ -376,64 +375,61 @@ export class RemoteMcpRegistry {
     if (server.tools[toolName]?.enabled === false) {
       throw new McpClientError(`MCP tool "${serverId}/${toolName}" is disabled`, 'configuration')
     }
-    const connection = await this.getConnection(serverId)
     try {
-      const result = await connection.client.callTool(
-        { name: toolName, arguments: args },
-        undefined,
-        {
-          timeout: this.requestTimeoutMs,
-          signal: options.signal,
-        },
-      )
-      return normalizeMcpToolResult(
-        result,
-        { serverId, serverName: server.name ?? serverId, toolName },
-        options.maxResultChars,
-      )
+      return await this.withConnection(serverId, async (connection) => {
+        const result = await connection.client.callTool(
+          { name: toolName, arguments: args },
+          undefined,
+          {
+            timeout: this.requestTimeoutMs,
+            signal: options.signal,
+          },
+        )
+        return normalizeMcpToolResult(
+          result,
+          { serverId, serverName: server.name ?? serverId, toolName },
+          options.maxResultChars,
+        )
+      })
     } catch (error) {
       throw classifyError(error)
-    } finally {
-      this.scheduleClose(serverId)
     }
   }
 
   async listResources(serverId: string): Promise<McpDiscoveredResource[]> {
-    const connection = await this.getConnection(serverId)
     try {
-      if (!connection.client.getServerCapabilities()?.resources) return []
-      return await this.collectPages(async (cursor) => {
-        const page = await connection.client.listResources(cursor ? { cursor } : undefined, {
-          timeout: this.requestTimeoutMs,
+      return await this.withConnection(serverId, async (connection) => {
+        if (!connection.client.getServerCapabilities()?.resources) return []
+        return this.collectPages(async (cursor) => {
+          const page = await connection.client.listResources(cursor ? { cursor } : undefined, {
+            timeout: this.requestTimeoutMs,
+          })
+          return { items: page.resources, nextCursor: page.nextCursor }
         })
-        return { items: page.resources, nextCursor: page.nextCursor }
       })
     } catch (error) {
       throw classifyError(error)
-    } finally {
-      this.scheduleClose(serverId)
     }
   }
 
   async readResource(serverId: string, uri: string): Promise<unknown> {
-    const connection = await this.getConnection(serverId)
     try {
-      const result = await connection.client.readResource(
-        { uri },
-        { timeout: this.requestTimeoutMs },
-      )
-      return normalizeMcpToolResult(
-        { content: result.contents.map((content) => ({ type: 'resource', resource: content })) },
-        {
-          serverId,
-          serverName: (await this.requireServer(serverId)).name ?? serverId,
-          toolName: 'resources/read',
-        },
-      )
+      return await this.withConnection(serverId, async (connection) => {
+        const result = await connection.client.readResource(
+          { uri },
+          { timeout: this.requestTimeoutMs },
+        )
+        return normalizeMcpToolResult(
+          { content: result.contents.map((content) => ({ type: 'resource', resource: content })) },
+          {
+            serverId,
+            serverName: (await this.requireServer(serverId)).name ?? serverId,
+            toolName: 'resources/read',
+          },
+        )
+      })
     } catch (error) {
       throw classifyError(error)
-    } finally {
-      this.scheduleClose(serverId)
     }
   }
 
@@ -446,9 +442,10 @@ export class RemoteMcpRegistry {
       throw new McpClientError('Set this MCP server auth mode to OAuth first', 'configuration')
     }
     let authorizationUrl: URL | undefined
-    const provider = new McpOAuthClientProvider(serverId, this.vault, redirectUrl, (url) => {
+    const provider = this.createOAuthProvider(serverId, redirectUrl, (url) => {
       authorizationUrl = url
     })
+    await provider.beginAuthorization()
     const result = await auth(provider, {
       serverUrl: server.url,
       fetchFn: this.fetchWithHeaders(server.headers),
@@ -471,34 +468,39 @@ export class RemoteMcpRegistry {
     redirectUrl = this.resolveRedirectUrl(),
   ): Promise<McpHealth> {
     const server = await this.requireServer(serverId)
+    const provider = this.createOAuthProvider(serverId, redirectUrl)
+    await provider.consumePendingAuthorization(callbackUrl)
     const callback = new URL(callbackUrl)
-    const oauthError = callback.searchParams.get('error')
-    if (oauthError) {
-      throw new McpClientError(
-        `MCP OAuth authorization failed: ${callback.searchParams.get('error_description') ?? oauthError}`,
-        'auth',
-      )
-    }
-    const code = callback.searchParams.get('code')
-    if (!code)
-      throw new McpClientError('MCP OAuth callback is missing an authorization code', 'auth')
+    try {
+      if (callback.searchParams.get('error')) {
+        throw new McpClientError(
+          'MCP OAuth authorization was denied or cancelled; restart authorization.',
+          'auth',
+        )
+      }
+      const code = callback.searchParams.get('code')
+      if (!code)
+        throw new McpClientError('MCP OAuth callback is missing an authorization code', 'auth')
 
-    const provider = new McpOAuthClientProvider(serverId, this.vault, redirectUrl)
-    const expectedState = await provider.expectedState()
-    const returnedState = callback.searchParams.get('state')
-    if (expectedState && returnedState !== expectedState) {
-      throw new McpClientError('MCP OAuth state mismatch; restart authorization', 'auth')
-    }
-    const result = await auth(provider, {
-      serverUrl: server.url,
-      authorizationCode: code,
-      fetchFn: this.fetchWithHeaders(server.headers),
-    })
-    if (result !== 'AUTHORIZED') {
-      throw new McpClientError('MCP OAuth token exchange did not complete', 'auth')
+      const result = await auth(provider, {
+        serverUrl: server.url,
+        authorizationCode: code,
+        fetchFn: this.fetchWithHeaders(server.headers),
+      })
+      if (result !== 'AUTHORIZED') {
+        throw new McpClientError('MCP OAuth token exchange did not complete', 'auth')
+      }
+    } finally {
+      await provider.clearPendingAuthorization()
     }
     await this.close(serverId)
     return this.testConnection(serverId)
+  }
+
+  async cancelOAuth(serverId: string, redirectUrl = this.resolveRedirectUrl()): Promise<void> {
+    await this.requireServer(serverId)
+    await this.close(serverId)
+    await this.createOAuthProvider(serverId, redirectUrl).clearPendingAuthorization()
   }
 
   async disconnectOAuth(serverId: string): Promise<void> {
@@ -544,7 +546,7 @@ export class RemoteMcpRegistry {
 
     const authProvider =
       server.auth.mode === 'oauth'
-        ? new McpOAuthClientProvider(serverId, this.vault, this.resolveRedirectUrl())
+        ? this.createOAuthProvider(serverId, this.resolveRedirectUrl())
         : undefined
     const headers = await this.resolveHeaders(serverId, server)
     const order: McpTransportKind[] =
@@ -567,6 +569,7 @@ export class RemoteMcpRegistry {
           ...created,
           kind,
           fingerprint,
+          activeLeases: 0,
         }
         this.connections.set(serverId, connection)
         this.observeTransportClose(serverId, connection)
@@ -664,7 +667,25 @@ export class RemoteMcpRegistry {
     const connection = this.connections.get(serverId)
     if (!connection) return
     if (connection.idleTimer) clearTimeout(connection.idleTimer)
+    if (connection.activeLeases > 0) {
+      connection.idleTimer = undefined
+      return
+    }
     connection.idleTimer = setTimeout(() => void this.close(serverId), this.idleMs)
+  }
+
+  private async withConnection<T>(
+    serverId: string,
+    operation: (connection: Connection) => Promise<T>,
+  ): Promise<T> {
+    const connection = await this.getConnection(serverId)
+    connection.activeLeases += 1
+    try {
+      return await operation(connection)
+    } finally {
+      connection.activeLeases = Math.max(0, connection.activeLeases - 1)
+      this.scheduleClose(serverId)
+    }
   }
 
   /**
@@ -709,5 +730,16 @@ export class RemoteMcpRegistry {
     if (typeof configured === 'function') return configured()
     if (configured) return configured
     return 'https://localhost/mcp-oauth-callback'
+  }
+
+  private createOAuthProvider(
+    serverId: string,
+    redirectUrl: string,
+    onRedirect?: (url: URL) => void | Promise<void>,
+  ): McpOAuthClientProvider {
+    return new McpOAuthClientProvider(serverId, this.vault, redirectUrl, onRedirect, {
+      now: this.now,
+      pendingTtlMs: this.options.oauthPendingTtlMs ?? MCP_OAUTH_PENDING_TTL_MS,
+    })
   }
 }

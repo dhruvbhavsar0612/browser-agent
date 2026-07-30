@@ -19,6 +19,8 @@ import type { MessageBus } from '../bus.js'
 
 const MCP_OAUTH_PENDING_KEY = 'browser-agent.mcp-oauth-pending'
 const MCP_OAUTH_CONNECT_TIMEOUT_MS = 5 * 60 * 1000
+const MCP_OAUTH_SAFE_ERROR =
+  'MCP OAuth could not be completed. Restart Connect and complete the callback before it expires.'
 
 type McpOAuthPending = {
   serverId: string
@@ -71,6 +73,19 @@ async function clearMcpOAuthPending(serverId: string): Promise<void> {
   await writeMcpOAuthPending(pending)
 }
 
+async function cancelMcpOAuthPending(serverId: string, registry: RemoteMcpRegistry): Promise<void> {
+  await Promise.all([
+    clearMcpOAuthPending(serverId),
+    registry.cancelOAuth(serverId).catch(() => {
+      // The pending record is still consumed when a server was removed or is unavailable.
+    }),
+  ])
+}
+
+function safeMcpOAuthError(): Error {
+  return new Error(MCP_OAUTH_SAFE_ERROR)
+}
+
 function isMcpOAuthCallback(callbackUrl: string, redirectUrl: string): boolean {
   try {
     const callback = new URL(callbackUrl)
@@ -99,7 +114,7 @@ async function completeMcpOAuthCallback(
   } catch {
     // The callback URL can contain an authorization code, so do not log it or
     // the thrown error. A fresh Connect attempt can safely restart the flow.
-    await clearMcpOAuthPending(pending.serverId)
+    await cancelMcpOAuthPending(pending.serverId, registry)
     console.warn('[browser-agent] MCP OAuth callback exchange failed')
   }
 }
@@ -109,7 +124,7 @@ function watchMcpOAuthCallback(pending: McpOAuthPending, registry: RemoteMcpRegi
   activeMcpOAuthListeners.get(pending.serverId)?.()
 
   const timer = setTimeout(() => {
-    void clearMcpOAuthPending(pending.serverId)
+    void cancelMcpOAuthPending(pending.serverId, registry)
   }, MCP_OAUTH_CONNECT_TIMEOUT_MS)
 
   const onUpdated = (
@@ -126,7 +141,7 @@ function watchMcpOAuthCallback(pending: McpOAuthPending, registry: RemoteMcpRegi
 
   const onRemoved = (tabId: number) => {
     if (tabId !== pending.tabId) return
-    void clearMcpOAuthPending(pending.serverId)
+    void cancelMcpOAuthPending(pending.serverId, registry)
   }
 
   function cleanup() {
@@ -146,7 +161,7 @@ async function restoreMcpOAuthCallbacks(registry: RemoteMcpRegistry): Promise<vo
   await Promise.all(
     Object.values(pendingMap).map(async (pending) => {
       if (Date.now() - pending.createdAt > MCP_OAUTH_CONNECT_TIMEOUT_MS) {
-        await clearMcpOAuthPending(pending.serverId)
+        await cancelMcpOAuthPending(pending.serverId, registry)
         return
       }
       watchMcpOAuthCallback(pending, registry)
@@ -190,14 +205,19 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
   bus
     .on('mcp.server.list', async (message) => {
       const config = await deps.config.get()
-      const [discoveries, credentials] = await Promise.all([
+      const [discoveries, credentials, oauthPending] = await Promise.all([
         deps.registry.listCachedDiscoveries(),
         deps.vault.listMcp(),
+        readMcpOAuthPending(),
       ])
       return createResponse(message, 'mcp.server.list', {
         servers: config.mcp,
         discoveries,
         credentials,
+        oauthPending: Object.values(oauthPending).map(({ serverId, createdAt }) => ({
+          serverId,
+          createdAt,
+        })),
       })
     })
     .on('mcp.server.create', async (message) => {
@@ -223,11 +243,11 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
     })
     .on('mcp.server.delete', async (message) => {
       const { id } = McpServerIdPayload.parse(message.payload)
+      await cancelMcpOAuthPending(id, deps.registry)
       await Promise.all([
         deps.registry.close(id),
         deps.registry.clearCachedDiscovery(id),
         deps.vault.deleteMcp(id),
-        clearMcpOAuthPending(id),
       ])
       await deps.config.set({ mcp: { [id]: null } })
       return createResponse(message, 'mcp.server.delete', { ok: true, id })
@@ -277,23 +297,43 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
     .on('mcp.oauth.connect', async (message) => {
       const { id } = McpServerIdPayload.parse(message.payload)
       const redirectUrl = oauthRedirectUrl()
-      const pending = await deps.registry.beginOAuth(id, redirectUrl)
+      let pending: { authorizationUrl: string; state: string }
       try {
-        const callbackUrl = await tryIdentityFlow(pending.authorizationUrl, redirectUrl)
-        if (callbackUrl) {
-          const health = await deps.registry.completeOAuth(id, callbackUrl, redirectUrl)
-          await clearMcpOAuthPending(id)
-          return createResponse(message, 'mcp.oauth.connect', { ok: health.ok, health })
-        }
+        pending = await deps.registry.beginOAuth(id, redirectUrl)
+      } catch {
+        await cancelMcpOAuthPending(id, deps.registry)
+        throw safeMcpOAuthError()
+      }
+      let callbackUrl: string | null
+      try {
+        callbackUrl = await tryIdentityFlow(pending.authorizationUrl, redirectUrl)
       } catch {
         // Fall through to the tab callback watcher. This is intentionally the
         // same resilient path used by provider OAuth for fixed redirects.
+        callbackUrl = null
+      }
+      if (callbackUrl) {
+        try {
+          const health = await deps.registry.completeOAuth(id, callbackUrl, redirectUrl)
+          await clearMcpOAuthPending(id)
+          return createResponse(message, 'mcp.oauth.connect', { ok: health.ok, health })
+        } catch {
+          await cancelMcpOAuthPending(id, deps.registry)
+          throw safeMcpOAuthError()
+        }
       }
 
       if (!hasMcpOAuthBrowserApis()) {
-        throw new Error('MCP OAuth needs chrome.identity or a browser callback tab')
+        await cancelMcpOAuthPending(id, deps.registry)
+        throw safeMcpOAuthError()
       }
-      const tab = await chrome.tabs.create({ url: pending.authorizationUrl, active: true })
+      let tab: chrome.tabs.Tab
+      try {
+        tab = await chrome.tabs.create({ url: pending.authorizationUrl, active: true })
+      } catch {
+        await cancelMcpOAuthPending(id, deps.registry)
+        throw safeMcpOAuthError()
+      }
       const fallbackPending: McpOAuthPending = {
         serverId: id,
         redirectUrl,
@@ -312,14 +352,24 @@ export function registerMcpHandlers(bus: MessageBus, deps: McpHandlerDeps): void
     })
     .on('mcp.oauth.complete', async (message) => {
       const { id, callbackUrl } = McpOAuthCompletePayload.parse(message.payload)
-      const health = await deps.registry.completeOAuth(id, callbackUrl, oauthRedirectUrl())
-      await clearMcpOAuthPending(id)
-      return createResponse(message, 'mcp.oauth.complete', { ok: health.ok, health })
+      try {
+        const health = await deps.registry.completeOAuth(id, callbackUrl, oauthRedirectUrl())
+        await clearMcpOAuthPending(id)
+        return createResponse(message, 'mcp.oauth.complete', { ok: health.ok, health })
+      } catch {
+        await cancelMcpOAuthPending(id, deps.registry)
+        throw safeMcpOAuthError()
+      }
+    })
+    .on('mcp.oauth.cancel', async (message) => {
+      const { id } = McpServerIdPayload.parse(message.payload)
+      await cancelMcpOAuthPending(id, deps.registry)
+      return createResponse(message, 'mcp.oauth.cancel', { ok: true, id })
     })
     .on('mcp.oauth.disconnect', async (message) => {
       const { id } = McpServerIdPayload.parse(message.payload)
+      await cancelMcpOAuthPending(id, deps.registry)
       await deps.registry.disconnectOAuth(id)
-      await clearMcpOAuthPending(id)
       return createResponse(message, 'mcp.oauth.disconnect', { ok: true, id })
     })
     .on('mcp.resources.list', async (message) => {

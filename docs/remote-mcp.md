@@ -18,14 +18,17 @@ Browser Agent supports remote MCP servers from MV3 without a stdio path.
 - `packages/extension/src/background/handlers/mcp.ts` provides typed CRUD, health, discovery,
   credentials, OAuth, resources, and marketplace messages. It prefers
   `chrome.identity.launchWebAuthFlow`, with a persisted, watched authorization-tab callback fallback
-  when identity flow is unavailable.
+  when identity flow is unavailable. The existing remote-MCP panel also exposes a minimal manual
+  callback control for providers that cannot return to that tab.
 - `packages/extension/src/sidepanel/RemoteMcpSettings.tsx` provides direct URL configuration,
   authentication, status, discovery/tool filtering, and Official MCP Registry import.
 
 Server configuration and non-secret headers sync through normal configuration. Bearer/API secrets,
 OAuth tokens, PKCE verifiers, registered client data, and OAuth discovery state are AES-GCM
 encrypted in the dedicated `mcp/` vault namespace in local storage. They are never written to
-synced configuration.
+synced configuration. An authorization state and PKCE verifier are fresh for every attempt,
+expire after five minutes, require the registered callback origin/path and matching state, and are
+consumed after a completion, cancellation, mismatch, expiry, or replay attempt.
 
 Discovery snapshots are local cache entries with server/version/protocol timestamps. They allow a
 restarted service worker to expose known tools immediately. Missing caches trigger on-demand
@@ -57,8 +60,8 @@ need to explain the supported choices; it contains no credential values.
 | Code | Meaning | Corrective action |
 | --- | --- | --- |
 | `auth` | Credential missing, expired, or unauthorized | Save a valid bearer/API credential or reconnect OAuth. |
-| `cors` | The endpoint explicitly blocked the extension request | Allow the extension origin and MCP request headers. |
-| `network` | DNS, connection, or fetch reachability failure | Verify the HTTPS endpoint, network path, and extension host permission. |
+| `cors` | The browser explicitly reported a CORS failure | Allow the extension origin and MCP request headers. This code is not inferred from opaque fetch failures. |
+| `network` | DNS, TLS, connection, host-policy, or opaque browser-fetch failure | Verify the HTTPS endpoint, DNS/TLS/network path, extension host permission, and provider CORS policy. Browsers do not reveal which one caused `Failed to fetch`. |
 | `transport` | The selected protocol is unsupported by the endpoint | Use the provider's protocol; use Auto only for possible legacy SSE endpoints. |
 | `protocol` | The endpoint did not complete an MCP handshake | Use the provider's MCP endpoint, not its web page or API root. |
 
@@ -68,8 +71,11 @@ authentication, CORS, DNS/network, or generic server failures as SSE.
 
 ## Live smoke test
 
-The smoke test skips unless a URL is configured. It only calls a tool explicitly annotated as
-read-only, non-destructive, and closed-world.
+The Node smoke test is supplemental only; the extension service-worker smoke below is authoritative
+for MV3 behavior. It skips unless a URL is configured and only calls a tool explicitly annotated as
+read-only, non-destructive, and closed-world. Its SSE fallback matches production: only explicit
+Streamable-HTTP negotiation rejections (`404`, `405`, `406`, `415`, or `501`) retry as SSE. It never
+retries auth, CORS, or opaque fetch failures as SSE.
 
 ```sh
 MCP_TEST_URL=https://example.com/mcp \
@@ -85,7 +91,8 @@ explicitly safe read-only. A reviewed tool that is read-only and non-destructive
 
 ## Extension service-worker live smoke
 
-The following checks exercise the MV3 background service worker, not the standalone smoke script.
+The following checks are authoritative because they exercise the MV3 background service worker, not
+the supplemental standalone smoke script.
 Do not put a credential in a shell command, source file, devtools snippet, or issue comment.
 
 1. Build the extension, open `chrome://extensions`, enable Developer mode, and load unpacked
@@ -151,3 +158,13 @@ Expect a successful health response and discovery. Stop the service worker in
 saved bearer credential must still be listed only as an `api` vault entry by
 `mcp.server.list`, never in response data. Remove the temporary GitHub server or use the explicit
 credential removal control when the test is complete.
+
+## OAuth callback fallback
+
+When `chrome.identity` cannot supply a callback, the extension opens an authorization tab and marks
+the server as pending. In the existing remote-MCP server editor, paste the complete final callback
+URL into **Complete OAuth** before the five-minute expiry. The UI sends `mcp.oauth.complete` and
+shows its sanitized health result; **Cancel authorization** sends `mcp.oauth.cancel` and consumes
+the pending state without deleting existing OAuth credentials. Callback URLs can contain an
+authorization code, so they are held only in the page's transient input state and are never logged,
+returned in responses, or saved to configuration.

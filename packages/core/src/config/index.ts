@@ -8,6 +8,7 @@ export {
   McpToolConfig,
   McpAuthConfig,
   CompactionConfig,
+  SettingsConfig,
   ReasoningEffort,
   DEFAULT_CONFIG,
   parseConfig,
@@ -30,6 +31,8 @@ export type {
   McpToolConfig as McpToolConfigType,
   McpAuthConfig as McpAuthConfigType,
   CompactionConfig as CompactionConfigType,
+  SettingsConfig as SettingsConfigType,
+  SettingsConfigPatch,
   ExecutionMode,
   ReasoningEffort as ReasoningEffortType,
 } from './schema.js'

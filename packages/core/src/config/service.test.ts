@@ -36,6 +36,15 @@ describe('ConfigService', () => {
     expect(cfg.executionMode).toBe('approval')
   })
 
+  it('round-trips developer mode through storage and service reinstantiation', async () => {
+    const storage = createMemoryStorage()
+    const svc = new ConfigService(storage)
+    await svc.set({ settings: { developerMode: true } })
+
+    const rehydrated = new ConfigService(storage)
+    expect((await rehydrated.get()).settings.developerMode).toBe(true)
+  })
+
   it('persists patches to local storage without secrets', async () => {
     const storage = createMemoryStorage()
     const svc = new ConfigService(storage)

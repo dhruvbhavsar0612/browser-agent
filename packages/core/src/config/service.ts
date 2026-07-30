@@ -16,6 +16,15 @@ export class ConfigService {
     const local = await this.storage.getLocal<unknown>(CONFIG_LOCAL_KEY)
     if (local) return mergeConfig(DEFAULT_CONFIG, migrateStoredConfig(local))
 
+    // Recheck under the write queue so a concurrent set/reset cannot be
+    // overwritten by a legacy sync-to-local migration.
+    return this.enqueueWrite(() => this.getOrMigrate())
+  }
+
+  private async getOrMigrate(): Promise<AppConfig> {
+    const local = await this.storage.getLocal<unknown>(CONFIG_LOCAL_KEY)
+    if (local) return mergeConfig(DEFAULT_CONFIG, migrateStoredConfig(local))
+
     // One-time migration from sync (pre-v0.4.6). Sync is too small for full config.
     const synced = await this.storage.getSync<unknown>(CONFIG_SYNC_KEY)
     if (!synced) return DEFAULT_CONFIG
@@ -33,7 +42,7 @@ export class ConfigService {
 
   set(patch: AppConfigPatch): Promise<AppConfig> {
     return this.enqueueWrite(async () => {
-      const current = await this.get()
+      const current = await this.getOrMigrate()
       const next = mergeConfig(current, patch)
       const safe = stripSecrets(next as unknown as Record<string, unknown>)
       await this.storage.setLocal(CONFIG_LOCAL_KEY, safe)

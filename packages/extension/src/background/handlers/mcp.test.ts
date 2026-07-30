@@ -1,6 +1,7 @@
 import {
   ConfigService,
   CredentialVault,
+  McpClientError,
   McpMarketplaceService,
   RemoteMcpRegistry,
   createMemoryStorage,

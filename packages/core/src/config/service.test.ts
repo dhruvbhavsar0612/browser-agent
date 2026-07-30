@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { ConfigService } from './service.js'
-import { createMemoryStorage, stripSecrets } from './storage.js'
+import {
+  CONFIG_LOCAL_KEY,
+  CONFIG_SYNC_KEY,
+  createMemoryStorage,
+  stripSecrets,
+  type StorageAdapter,
+} from './storage.js'
 
 describe('stripSecrets', () => {
   it('removes apiKey from provider options', () => {
@@ -34,6 +40,104 @@ describe('ConfigService', () => {
     const svc = new ConfigService(createMemoryStorage())
     const cfg = await svc.get()
     expect(cfg.executionMode).toBe('approval')
+  })
+
+  it('round-trips developer mode through storage and service reinstantiation', async () => {
+    const storage = createMemoryStorage()
+    const svc = new ConfigService(storage)
+    await svc.set({ settings: { developerMode: true } })
+
+    const rehydrated = new ConfigService(storage)
+    expect((await rehydrated.get()).settings.developerMode).toBe(true)
+  })
+
+  it('serializes concurrent partial patches before persisting', async () => {
+    const backing = createMemoryStorage()
+    let localReadCount = 0
+    let blockFirstRead = true
+    let notifyFirstRead: () => void = () => undefined
+    let releaseFirstRead: () => void = () => undefined
+    const firstRead = new Promise<void>((resolve) => {
+      notifyFirstRead = resolve
+    })
+    const firstReadReleased = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve
+    })
+    const storage: StorageAdapter = {
+      getSync: (key) => backing.getSync(key),
+      setSync: (key, value) => backing.setSync(key, value),
+      getLocal: async <T>(key: string) => {
+        const snapshot = await backing.getLocal<T>(key)
+        if (key === CONFIG_LOCAL_KEY) {
+          localReadCount += 1
+          if (blockFirstRead) {
+            blockFirstRead = false
+            notifyFirstRead()
+            await firstReadReleased
+          }
+        }
+        return snapshot
+      },
+      setLocal: (key, value) => backing.setLocal(key, value),
+      removeLocal: (key) => backing.removeLocal(key),
+    }
+    const svc = new ConfigService(storage)
+
+    const developerModePatch = svc.set({ settings: { developerMode: true } })
+    await firstRead
+    const executionModePatch = svc.set({ executionMode: 'plan' })
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    try {
+      expect(localReadCount).toBe(1)
+    } finally {
+      releaseFirstRead()
+    }
+
+    await Promise.all([developerModePatch, executionModePatch])
+    const persisted = await new ConfigService(backing).get()
+    expect(persisted.settings.developerMode).toBe(true)
+    expect(persisted.executionMode).toBe('plan')
+  })
+
+  it('preserves a concurrent patch while migrating legacy sync config', async () => {
+    const backing = createMemoryStorage()
+    await backing.setSync(CONFIG_SYNC_KEY, { executionMode: 'plan' })
+
+    let blockFirstLocalWrite = true
+    let notifyFirstLocalWrite: () => void = () => undefined
+    let releaseFirstLocalWrite: () => void = () => undefined
+    const firstLocalWrite = new Promise<void>((resolve) => {
+      notifyFirstLocalWrite = resolve
+    })
+    const firstLocalWriteReleased = new Promise<void>((resolve) => {
+      releaseFirstLocalWrite = resolve
+    })
+    const storage: StorageAdapter = {
+      getSync: (key) => backing.getSync(key),
+      setSync: (key, value) => backing.setSync(key, value),
+      getLocal: (key) => backing.getLocal(key),
+      setLocal: async (key, value) => {
+        if (key === CONFIG_LOCAL_KEY && blockFirstLocalWrite) {
+          blockFirstLocalWrite = false
+          notifyFirstLocalWrite()
+          await firstLocalWriteReleased
+        }
+        await backing.setLocal(key, value)
+      },
+      removeLocal: (key) => backing.removeLocal(key),
+    }
+    const svc = new ConfigService(storage)
+
+    const migration = svc.get()
+    await firstLocalWrite
+    const developerModePatch = svc.set({ settings: { developerMode: true } })
+    releaseFirstLocalWrite()
+
+    await Promise.all([migration, developerModePatch])
+    const persisted = await new ConfigService(backing).get()
+    expect(persisted.executionMode).toBe('plan')
+    expect(persisted.settings.developerMode).toBe(true)
   })
 
   it('persists patches to local storage without secrets', async () => {

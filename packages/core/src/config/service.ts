@@ -5,17 +5,23 @@ import {
   type AppConfig,
   type AppConfigPatch,
 } from './schema.js'
-import {
-  CONFIG_LOCAL_KEY,
-  CONFIG_SYNC_KEY,
-  stripSecrets,
-  type StorageAdapter,
-} from './storage.js'
+import { CONFIG_LOCAL_KEY, CONFIG_SYNC_KEY, stripSecrets, type StorageAdapter } from './storage.js'
 
 export class ConfigService {
+  private writeQueue: Promise<void> = Promise.resolve()
+
   constructor(private readonly storage: StorageAdapter) {}
 
   async get(): Promise<AppConfig> {
+    const local = await this.storage.getLocal<unknown>(CONFIG_LOCAL_KEY)
+    if (local) return mergeConfig(DEFAULT_CONFIG, migrateStoredConfig(local))
+
+    // Recheck under the write queue so a concurrent set/reset cannot be
+    // overwritten by a legacy sync-to-local migration.
+    return this.enqueueWrite(() => this.getOrMigrate())
+  }
+
+  private async getOrMigrate(): Promise<AppConfig> {
     const local = await this.storage.getLocal<unknown>(CONFIG_LOCAL_KEY)
     if (local) return mergeConfig(DEFAULT_CONFIG, migrateStoredConfig(local))
 
@@ -34,20 +40,33 @@ export class ConfigService {
     return parseConfig(safe)
   }
 
-  async set(patch: AppConfigPatch): Promise<AppConfig> {
-    const current = await this.get()
-    const next = mergeConfig(current, patch)
-    const safe = stripSecrets(next as unknown as Record<string, unknown>)
-    await this.storage.setLocal(CONFIG_LOCAL_KEY, safe)
-    return parseConfig(safe)
+  set(patch: AppConfigPatch): Promise<AppConfig> {
+    return this.enqueueWrite(async () => {
+      const current = await this.getOrMigrate()
+      const next = mergeConfig(current, patch)
+      const safe = stripSecrets(next as unknown as Record<string, unknown>)
+      await this.storage.setLocal(CONFIG_LOCAL_KEY, safe)
+      return parseConfig(safe)
+    })
   }
 
-  async reset(): Promise<AppConfig> {
-    await this.storage.setLocal(
-      CONFIG_LOCAL_KEY,
-      stripSecrets(DEFAULT_CONFIG as unknown as Record<string, unknown>),
+  reset(): Promise<AppConfig> {
+    return this.enqueueWrite(async () => {
+      await this.storage.setLocal(
+        CONFIG_LOCAL_KEY,
+        stripSecrets(DEFAULT_CONFIG as unknown as Record<string, unknown>),
+      )
+      return DEFAULT_CONFIG
+    })
+  }
+
+  private enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.writeQueue.then(operation)
+    this.writeQueue = result.then(
+      () => undefined,
+      () => undefined,
     )
-    return DEFAULT_CONFIG
+    return result
   }
 }
 

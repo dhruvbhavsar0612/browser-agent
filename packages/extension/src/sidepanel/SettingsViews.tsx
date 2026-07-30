@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+export { DeveloperSettingsView } from './DeveloperSettingsView.js'
 
 type SettingsViewProps = {
   children: ReactNode
@@ -72,20 +73,5 @@ export function PermissionsSettingsView(props: SettingsViewProps) {
     >
       {props.children}
     </section>
-  )
-}
-
-export function DeveloperSettingsView({ hidden }: { hidden: boolean }) {
-  return (
-    <SettingsViewSection
-      hidden={hidden}
-      id="developer"
-      title="Developer"
-      description="Advanced settings appear here as they become available."
-    >
-      <p className="settings-hint">
-        Developer controls are kept separate from everyday provider and connector setup.
-      </p>
-    </SettingsViewSection>
   )
 }

@@ -9,6 +9,23 @@ describe('config schema', () => {
     expect(cfg.agent.browse).toBeDefined()
   })
 
+  it('defaults developer mode to false', () => {
+    expect(parseConfig({}).settings.developerMode).toBe(false)
+  })
+
+  it('rejects a non-boolean developer mode value', () => {
+    expect(() =>
+      parseConfig({ ...DEFAULT_CONFIG, settings: { developerMode: 'enabled' } }),
+    ).toThrow()
+  })
+
+  it('deeply merges settings patches', () => {
+    const enabled = mergeConfig(DEFAULT_CONFIG, { settings: { developerMode: true } })
+    const patched = mergeConfig(enabled, { settings: {} })
+
+    expect(patched.settings.developerMode).toBe(true)
+  })
+
   it('rejects invalid execution mode', () => {
     expect(() => parseConfig({ ...DEFAULT_CONFIG, executionMode: 'nope' })).toThrow()
   })

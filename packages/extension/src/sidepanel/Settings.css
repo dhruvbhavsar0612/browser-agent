@@ -28,7 +28,7 @@
   line-height: 1.5;
 }
 
-/* ── Two-column layout ──────────────────────────── */
+/* ── View-switching layout ───────────────────────── */
 .settings-layout {
   display: flex;
   gap: 40px;
@@ -56,7 +56,9 @@
   font-size: 13px;
   color: var(--muted);
   cursor: pointer;
-  transition: color var(--motion-fast), background var(--motion-fast);
+  transition:
+    color var(--motion-fast),
+    background var(--motion-fast);
 }
 
 .settings-nav-item:hover {
@@ -74,9 +76,6 @@
 .settings-main {
   flex: 1 1 0;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 48px;
 }
 
 /* ── Section ────────────────────────────────────── */
@@ -84,7 +83,10 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  scroll-margin-top: 16px;
+}
+
+.settings-section[hidden] {
+  display: none;
 }
 
 .settings-section-heading {

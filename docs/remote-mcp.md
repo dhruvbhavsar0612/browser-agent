@@ -181,6 +181,10 @@ The viable paths are:
   provider-registered **public** client ID and its exact HTTPS (or localhost) redirect URL, then
   save before connecting. Client secrets are intentionally unsupported and never stored. Browser
   Agent opens and watches that registered redirect in a tab; it does not invent a hosted callback.
+  Because this URI is durable configuration, it must not contain userinfo, a fragment, or query
+  parameters named `client_secret`, `secret`, `token`, `access_token`, `refresh_token`, `password`,
+  or `api_key` (matching is case-insensitive; `api-key` is treated equivalently). Use a clean,
+  provider-registered callback URI instead.
 
 When Chrome fails to capture a callback after the provider has accepted a valid registered redirect,
 the editor offers **Complete OAuth**. Paste only the final callback URL before the five-minute

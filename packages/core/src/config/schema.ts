@@ -86,6 +86,15 @@ export const AgentConfig = z.object({
 export type AgentConfig = z.infer<typeof AgentConfig>
 
 const SECRET_HEADER_NAME = /^(authorization|proxy-authorization|x-api-key|api-key|x-auth-token)$/i
+const SENSITIVE_OAUTH_REDIRECT_QUERY_NAMES = new Set([
+  'client_secret',
+  'secret',
+  'token',
+  'access_token',
+  'refresh_token',
+  'password',
+  'api_key',
+])
 
 export function isSecureRemoteUrl(value: string): boolean {
   try {
@@ -94,6 +103,26 @@ export function isSecureRemoteUrl(value: string): boolean {
     return (
       url.protocol === 'http:' &&
       (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * OAuth redirect URIs are public configuration. Keep credentials and callback
+ * response data out of that durable storage; the callback URL itself is only
+ * accepted later as transient OAuth completion input.
+ */
+export function isSafeOAuthRedirectUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    if (!isSecureRemoteUrl(value) || url.username || url.password || value.includes('#')) {
+      return false
+    }
+
+    return [...url.searchParams.keys()].every(
+      (name) => !SENSITIVE_OAUTH_REDIRECT_QUERY_NAMES.has(name.toLowerCase().replaceAll('-', '_')),
     )
   } catch {
     return false
@@ -116,8 +145,8 @@ export const McpOAuthPublicClientConfig = z
       .string()
       .url()
       .refine(
-        isSecureRemoteUrl,
-        'OAuth redirect URL must use HTTPS (HTTP is allowed for localhost only)',
+        isSafeOAuthRedirectUrl,
+        'OAuth redirect URL must use HTTPS (HTTP is allowed for localhost only) and cannot contain userinfo, a fragment, or sensitive query parameters',
       ),
   })
   .strict()

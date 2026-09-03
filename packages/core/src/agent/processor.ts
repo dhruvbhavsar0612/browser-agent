@@ -28,7 +28,7 @@ export type DurablePart =
     }
   | {
       type: 'tool-result'
-      content: { toolCallId: string; segmentId: string; result: unknown }
+      content: { toolCallId: string; segmentId: string; result: unknown; isError?: boolean }
     }
 
 export type DoomLoopOptions = {
@@ -490,9 +490,11 @@ export async function processFullStream<TOOLS extends ToolSet = ToolSet>(
           })
           await options.onPart?.({
             type: 'tool-result',
-            content: { toolCallId: part.toolCallId, segmentId, result },
+            content: { toolCallId: part.toolCallId, segmentId, result, isError: true },
           })
-          options.onEvent({ kind: 'error', message })
+          // Tool failures are returned to the model so the run can continue.
+          // Do not emit a stream-level `error` — the side panel treats that as
+          // fatal and stops applying later events even while the agent is still working.
           break
         }
 

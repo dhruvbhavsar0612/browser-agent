@@ -125,6 +125,30 @@ describe('reduceAssistantSegments', () => {
     })
   })
 
+  it('marks tool results with an error payload as failed even without isError', () => {
+    const segments = reduce([
+      {
+        kind: 'tool-call',
+        segmentId: 'tool-1',
+        toolCallId: 'call-1',
+        toolName: 'click',
+        args: { refId: 'ref_243' },
+      },
+      {
+        kind: 'tool-result',
+        segmentId: 'tool-1',
+        toolCallId: 'call-1',
+        result: { error: "ref_id 'ref_243' has no visible bounding box" },
+      },
+    ])
+
+    expect(segments[0]).toMatchObject({
+      type: 'tool',
+      status: 'error',
+      result: { error: "ref_id 'ref_243' has no visible bounding box" },
+    })
+  })
+
   it('treats compaction events as status metadata, not assistant content', () => {
     const before = reduce([{ kind: 'text-delta', segmentId: 'text-1', text: 'Answer' }])
     const after = reduceAssistantSegments(before, {

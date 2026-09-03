@@ -215,12 +215,9 @@ describe('processFullStream', () => {
             error: "Either the '<all_urls>' or 'activeTab' permission is required.",
           },
         }),
-        expect.objectContaining({
-          kind: 'error',
-          message: "Either the '<all_urls>' or 'activeTab' permission is required.",
-        }),
       ]),
     )
+    expect(events.some((event) => event.kind === 'error')).toBe(false)
   })
 
   it('preserves text → tool → text chronology in events and durable parts', async () => {
@@ -352,7 +349,7 @@ describe('processFullStream', () => {
     expect(truncated.truncated).toBe(true)
   })
 
-  it('maps tool-error and stream error to error events', async () => {
+  it('does not treat tool-error as a fatal stream error', async () => {
     const toolErr = await collect([
       {
         type: 'tool-error',
@@ -362,9 +359,24 @@ describe('processFullStream', () => {
         error: new Error('boom'),
         dynamic: true,
       },
-      { type: 'finish', finishReason: 'error', rawFinishReason: 'error', totalUsage: {} as never },
+      { type: 'text-delta', id: 't1', text: 'retrying' },
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
-    expect(toolErr.events).toContainEqual({ kind: 'error', message: 'boom' })
+    expect(toolErr.events).toContainEqual({
+      kind: 'tool-result',
+      segmentId: 'tool-1',
+      toolCallId: 'c1',
+      result: { error: 'boom' },
+      isError: true,
+    })
+    expect(toolErr.events.some((event) => event.kind === 'error')).toBe(false)
+    expect(toolErr.events.filter((event) => event.kind === 'text-delta').map((event) => event.text)).toEqual([
+      'retrying',
+    ])
+    expect(toolErr.durable).toContainEqual({
+      type: 'tool-result',
+      content: { toolCallId: 'c1', segmentId: 'tool-1', result: { error: 'boom' }, isError: true },
+    })
 
     const streamErr = await collect([{ type: 'error', error: new Error('stream failed') }])
     expect(streamErr.events).toContainEqual({ kind: 'error', message: 'stream failed' })

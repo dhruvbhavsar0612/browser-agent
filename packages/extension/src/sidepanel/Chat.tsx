@@ -11,10 +11,12 @@ import {
 } from '@browser-agent/core'
 import { sendRequest } from './client.js'
 import { MarkdownContent } from './markdown.js'
+import { MessageErrorBoundary } from './MessageErrorBoundary.js'
 import { PermissionAskBanner, type PermissionAskRequest } from './PermissionAsk.js'
 import { ThinkingDisclosure } from './ThinkingDisclosure.js'
 import { ToolInspector } from './ToolInspector.js'
 import { ManagedStreamConnection } from './stream-connection.js'
+import { applyConnectionStatusToRun, reconcileLiveMessages } from './chat-stream.js'
 import {
   assistantSegmentsText,
   reduceAssistantSegments,
@@ -167,61 +169,79 @@ export function ChatView({
     })
   }, [])
 
+  const reconcileFromSession = useCallback(async () => {
+    const id = sessionIdRef.current
+    if (!id) return
+    try {
+      const response = await sendRequest('session.get', { id })
+      if (response.type === 'error') return
+      const rows = (response.payload ?? []) as TranscriptRow[]
+      const persisted = transcriptToMessages(rows)
+      setMessages((live) => reconcileLiveMessages(live, persisted))
+    } catch {
+      // Keep the live transcript if catch-up fails; the stream may still deliver events.
+    }
+  }, [])
+
   const handleStreamEvent = useCallback(
     (event: StreamEvent, envelopeId: string) => {
-      const requestId = activeRequestIdRef.current
-      if (!requestId || envelopeId !== requestId) return
+      try {
+        const requestId = activeRequestIdRef.current
+        if (!requestId || envelopeId !== requestId) return
 
-      if (
-        event.kind === 'segment-start' ||
-        event.kind === 'segment-end' ||
-        event.kind === 'step-start' ||
-        event.kind === 'step-end' ||
-        event.kind === 'text-delta' ||
-        event.kind === 'reasoning-delta' ||
-        event.kind === 'tool-call' ||
-        event.kind === 'tool-result'
-      ) {
-        appendAssistantEvent(event)
-        return
-      }
+        if (
+          event.kind === 'segment-start' ||
+          event.kind === 'segment-end' ||
+          event.kind === 'step-start' ||
+          event.kind === 'step-end' ||
+          event.kind === 'text-delta' ||
+          event.kind === 'reasoning-delta' ||
+          event.kind === 'tool-call' ||
+          event.kind === 'tool-result'
+        ) {
+          appendAssistantEvent(event)
+          return
+        }
 
-      if (event.kind === 'permission-ask') {
-        setPermissionQueue((prev) => {
-          if (prev.some((item) => item.requestId === event.requestId)) return prev
-          return [
-            ...prev,
-            {
-              requestId: event.requestId,
-              permission: event.permission,
-              patterns: event.patterns,
-              metadata: event.metadata,
-            },
-          ]
-        })
-        return
-      }
+        if (event.kind === 'permission-ask') {
+          setPermissionQueue((prev) => {
+            if (prev.some((item) => item.requestId === event.requestId)) return prev
+            return [
+              ...prev,
+              {
+                requestId: event.requestId,
+                permission: event.permission,
+                patterns: event.patterns,
+                metadata: event.metadata,
+              },
+            ]
+          })
+          return
+        }
 
-      if (event.kind === 'compaction') {
-        setCompactionStatus(event.message)
-        return
-      }
+        if (event.kind === 'compaction') {
+          setCompactionStatus(event.message)
+          return
+        }
 
-      if (event.kind === 'error') {
-        appendAssistantEvent(event)
-        setError(event.message)
-        setStreaming(false)
-        activeRequestIdRef.current = null
-        setPermissionQueue([])
-        return
-      }
+        if (event.kind === 'error') {
+          appendAssistantEvent(event)
+          setError(event.message)
+          setStreaming(false)
+          activeRequestIdRef.current = null
+          setPermissionQueue([])
+          return
+        }
 
-      if (event.kind === 'done') {
-        appendAssistantEvent(event)
-        setStreaming(false)
-        activeRequestIdRef.current = null
-        setPermissionQueue([])
-        onSessionsRefresh()
+        if (event.kind === 'done') {
+          appendAssistantEvent(event)
+          setStreaming(false)
+          activeRequestIdRef.current = null
+          setPermissionQueue([])
+          onSessionsRefresh()
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
       }
     },
     [appendAssistantEvent, onSessionsRefresh],
@@ -233,17 +253,31 @@ export function ChatView({
       onStatus: (status) => {
         setConnectionStatus(status)
         if (status === 'disconnected' && streamingRef.current) {
-          setStreaming(false)
-          activeRequestIdRef.current = null
-          setError('Connection interrupted. Reconnecting… try sending again in a moment.')
+          setError(
+            applyConnectionStatusToRun(
+              {
+                streaming: true,
+                requestId: activeRequestIdRef.current,
+                error: null,
+              },
+              'disconnected',
+            ).error,
+          )
         }
         if (status === 'connected') {
           setError((prev) =>
-            prev?.startsWith('Connection interrupted') ||
-            prev?.startsWith('Stream connection unavailable')
-              ? null
-              : prev,
+            applyConnectionStatusToRun(
+              {
+                streaming: streamingRef.current,
+                requestId: activeRequestIdRef.current,
+                error: prev,
+              },
+              'connected',
+            ).error,
           )
+          if (streamingRef.current) {
+            void reconcileFromSession()
+          }
         }
       },
     })
@@ -252,7 +286,7 @@ export function ChatView({
       connection.dispose()
       streamRef.current = null
     }
-  }, [handleStreamEvent])
+  }, [handleStreamEvent, reconcileFromSession])
 
   useEffect(() => {
     let cancelled = false
@@ -558,7 +592,8 @@ export function ChatView({
             )
 
             return (
-              <div key={message.id} className={`chat-message chat-message-${message.role}`}>
+              <MessageErrorBoundary key={message.id}>
+                <div className={`chat-message chat-message-${message.role}`}>
                 {message.role === 'assistant'
                   ? segments.map((segment) => {
                       if (segment.type === 'text') {
@@ -614,7 +649,8 @@ export function ChatView({
                 {isStreamingAssistant && !hasVisibleSegment ? (
                   <div className="chat-bubble chat-bubble-assistant">…</div>
                 ) : null}
-              </div>
+                </div>
+              </MessageErrorBoundary>
             )
           })
         )}

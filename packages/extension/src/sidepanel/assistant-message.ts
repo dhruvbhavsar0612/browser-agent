@@ -150,7 +150,12 @@ export function reduceAssistantSegments(
           segment.type === 'tool' &&
           (segment.id === event.segmentId || segment.toolCallId === event.toolCallId),
       )
-      const status = event.isError ? ('error' as const) : ('done' as const)
+      const resultLooksLikeError =
+        event.result != null &&
+        typeof event.result === 'object' &&
+        'error' in (event.result as object)
+      const status =
+        event.isError || resultLooksLikeError ? ('error' as const) : ('done' as const)
       if (index < 0) {
         return [
           ...completeStreamingSegments(segments),
@@ -263,6 +268,7 @@ export function transcriptToMessages(rows: TranscriptRow[]): UiMessage[] {
           toolCallId?: string
           segmentId?: string
           result?: unknown
+          isError?: boolean
         }
         if (result.toolCallId) {
           segments = reduceAssistantSegments(segments, {
@@ -270,6 +276,7 @@ export function transcriptToMessages(rows: TranscriptRow[]): UiMessage[] {
             segmentId: result.segmentId,
             toolCallId: result.toolCallId,
             result: result.result,
+            isError: result.isError,
           })
         }
       }

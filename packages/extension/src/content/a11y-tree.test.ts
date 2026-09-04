@@ -120,6 +120,105 @@ describe('a11y-tree', () => {
     const select = document.querySelector('#country') as HTMLSelectElement
     expect(select.value).toBe('ca')
   })
+
+  it('resolves a zero-size wrapper using a visible child', () => {
+    loadFixture(`
+      <body>
+        <div role="listbox">
+          <div role="option" id="wrap" aria-label="California"><span id="label">California</span></div>
+        </div>
+      </body>
+    `)
+    const wrap = document.getElementById('wrap') as HTMLElement
+    const label = document.getElementById('label') as HTMLElement
+    wrap.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        left: 0,
+        bottom: 0,
+        right: 0,
+        width: 0,
+        height: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect
+    wrap.getClientRects = () => [] as unknown as DOMRectList
+    label.getBoundingClientRect = () =>
+      ({
+        top: 10,
+        left: 20,
+        bottom: 34,
+        right: 100,
+        width: 80,
+        height: 24,
+        x: 20,
+        y: 10,
+        toJSON: () => ({}),
+      }) as DOMRect
+
+    const tree = window.__baGenerateA11yTree('all')
+    const ref = tree.pageContent.match(/option "California" \[(ref_\d+)\]/)?.[1]
+    expect(ref).toBeTruthy()
+    expect(window.__baResolveRef(ref!)).toEqual({ ok: true, x: 60, y: 22 })
+  })
+
+  it('does not use a zero-size closest button over the element itself', () => {
+    loadFixture(`
+      <body>
+        <button id="outer"><span id="inner">California</span></button>
+      </body>
+    `)
+    const outer = document.getElementById('outer') as HTMLElement
+    const inner = document.getElementById('inner') as HTMLElement
+    outer.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        left: 0,
+        bottom: 0,
+        right: 0,
+        width: 0,
+        height: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect
+    inner.getBoundingClientRect = () =>
+      ({
+        top: 8,
+        left: 8,
+        bottom: 32,
+        right: 88,
+        width: 80,
+        height: 24,
+        x: 8,
+        y: 8,
+        toJSON: () => ({}),
+      }) as DOMRect
+
+    const tree = window.__baGenerateA11yTree('all')
+    const ref = tree.pageContent.match(/button "California" \[(ref_\d+)\]/)?.[1]
+    expect(ref).toBeTruthy()
+    expect(window.__baResolveRef(ref!)).toEqual({ ok: true, x: 48, y: 20 })
+  })
+
+  it('explains when a ref is hidden instead of only reporting a missing box', () => {
+    loadFixture(`
+      <body>
+        <button id="hidden">California</button>
+      </body>
+    `)
+    const hidden = document.getElementById('hidden') as HTMLElement
+    hidden.style.display = 'none'
+    const tree = window.__baGenerateA11yTree('all')
+    const ref = tree.pageContent.match(/button "California" \[(ref_\d+)\]/)?.[1]
+    expect(ref).toBeTruthy()
+    const resolved = window.__baResolveRef(ref!)
+    expect(resolved.ok).toBe(false)
+    if (!resolved.ok) {
+      expect(resolved.error).toMatch(/hidden or collapsed/)
+    }
+  })
 })
 
 declare global {

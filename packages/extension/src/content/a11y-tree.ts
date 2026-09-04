@@ -378,6 +378,92 @@ interface A11yTreeResult {
     }
   }
 
+  function firstPositiveRect(el: Element): DOMRect | null {
+    try {
+      const box = el.getBoundingClientRect()
+      if (box.width > 0 && box.height > 0) return box
+      const list = el.getClientRects()
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i]
+        if (item && item.width > 0 && item.height > 0) return item
+      }
+    } catch {
+      /* detached SVG / not laid out */
+    }
+    return null
+  }
+
+  function isDisplayHidden(el: Element): boolean {
+    let cur: Element | null = el
+    while (cur && cur !== document.documentElement) {
+      const style = window.getComputedStyle(cur)
+      if (style.display === 'none' || style.visibility === 'hidden') return true
+      cur = cur.parentElement
+    }
+    return false
+  }
+
+  function scrollTargetIntoView(el: Element): void {
+    try {
+      ;(el as HTMLElement).scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+    } catch {
+      /* ignore */
+    }
+    let parent = el.parentElement
+    while (parent && parent !== document.body) {
+      const style = window.getComputedStyle(parent)
+      if (/(auto|scroll)/.test(style.overflow + style.overflowY + style.overflowX)) {
+        try {
+          const parentBox = parent.getBoundingClientRect()
+          const elBox = el.getBoundingClientRect()
+          parent.scrollTop += elBox.top - parentBox.top - parentBox.height / 2 + elBox.height / 2
+          parent.scrollLeft += elBox.left - parentBox.left - parentBox.width / 2 + elBox.width / 2
+        } catch {
+          /* ignore */
+        }
+      }
+      parent = parent.parentElement
+    }
+  }
+
+  function findVisibleRect(start: Element): DOMRect | null {
+    scrollTargetIntoView(start)
+    const self = firstPositiveRect(start)
+    if (self) return self
+
+    if (start instanceof HTMLOptionElement || start instanceof HTMLOptGroupElement) {
+      const select = start.closest('select')
+      if (select) {
+        const selectBox = firstPositiveRect(select)
+        if (selectBox) return selectBox
+      }
+    }
+
+    const descendants = start.querySelectorAll('*')
+    for (let i = 0; i < descendants.length && i < 50; i++) {
+      const childBox = firstPositiveRect(descendants[i]!)
+      if (childBox) return childBox
+    }
+
+    const interactive = start.closest(
+      'button,a,[role="button"],[role="link"],[role="option"],[role="menuitem"],input,textarea,select,[contenteditable="true"]',
+    )
+    if (interactive && interactive !== start) {
+      const interactiveBox = firstPositiveRect(interactive)
+      if (interactiveBox) return interactiveBox
+    }
+
+    let parent = start.parentElement
+    let depth = 0
+    while (parent && depth < 6) {
+      const parentBox = firstPositiveRect(parent)
+      if (parentBox) return parentBox
+      parent = parent.parentElement
+      depth += 1
+    }
+    return null
+  }
+
   window.__baResolveRef = function (refId) {
     const entry = window.__baElementMap[refId]
     if (!entry) {
@@ -387,14 +473,33 @@ interface A11yTreeResult {
     if (!node) {
       return { ok: false, error: "ref_id '" + refId + "' has been removed from the DOM" }
     }
-    const clickable =
-      node.closest(
-        'button,a,[role="button"],[role="link"],input,textarea,select,[contenteditable="true"]',
-      ) || node
-    ;(clickable as HTMLElement).scrollIntoView?.({ block: 'center', inline: 'center' })
-    const r = clickable.getBoundingClientRect()
-    if (r.width <= 0 || r.height <= 0) {
-      return { ok: false, error: "ref_id '" + refId + "' has no visible bounding box" }
+    if (isDisplayHidden(node)) {
+      return {
+        ok: false,
+        error:
+          "ref_id '" +
+          refId +
+          "' is not visible (hidden or collapsed). Open the control if it is a dropdown, then call page_read and click a currently visible element.",
+      }
+    }
+    if (node instanceof HTMLOptionElement) {
+      const select = node.closest('select')
+      if (select) {
+        select.value = node.value
+        node.selected = true
+        select.dispatchEvent(new Event('input', { bubbles: true }))
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    }
+    const r = findVisibleRect(node)
+    if (!r) {
+      return {
+        ok: false,
+        error:
+          "ref_id '" +
+          refId +
+          "' has no visible bounding box. Call page_read and click a currently visible element.",
+      }
     }
     return {
       ok: true,

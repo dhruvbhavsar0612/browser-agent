@@ -2,7 +2,7 @@
 
 A BYOK Chrome extension that acts on the web like a user — with any connectable LLM provider, permissions you control, and optional remote MCP tools.
 
-**Latest release: [v0.5.0](https://github.com/dhruvbhavsar0612/browser-agent/releases/tag/v0.5.0)** · License: [MIT](LICENSE)
+**Latest release: [v0.5.1](https://github.com/dhruvbhavsar0612/browser-agent/releases/tag/v0.5.1)** · License: [MIT](LICENSE)
 
 ## Install (downloadable build)
 
@@ -16,7 +16,7 @@ API keys and OAuth tokens stay in an encrypted local vault. Nothing in the zip c
 
 ## Status
 
-**v0.5.0** — Settings as a dedicated tab, searchable MCP, thinking effort + compaction, default agent **act**. Sprints 0–5 complete; Sprint 6 polish in progress.
+**v0.5.1** — Patch: chat history keeps updating after tool errors; clicks on zero-size or hidden refs no longer fail with a dead bounding-box error. **v0.5.0** — Settings as a dedicated tab, searchable MCP, thinking effort + compaction, default agent **act**. Sprints 0–5 complete; Sprint 6 polish in progress.
 
 | Capability | Status |
 |------------|--------|
@@ -105,8 +105,8 @@ OpenAI-compatible endpoints (e.g. OpenCode Zen) work: set **Base URL** + key in 
 | **Release** | Push tag `v*` / semver (or manual dispatch) | Same checks → attach zip to a GitHub Release with install notes |
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 Do not create a Release from the GitHub UI alone — push a tag (or use **Actions → Release → Run workflow**) so the zip is built. See [RELEASE.md](docs/RELEASE.md).

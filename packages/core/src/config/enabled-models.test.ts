@@ -80,6 +80,22 @@ describe('listEnabledModelGroups', () => {
     })
     expect(listEnabledModelGroups(config, [], { connections: {} })).toEqual([])
   })
+
+  it('treats OpenCode Go as connected when a credential is present', () => {
+    const config = mergeConfig(DEFAULT_CONFIG, {
+      provider: {
+        'opencode-go': {
+          enabled: true,
+          models: { 'kimi-k3': { enabled: true, name: 'Kimi K3' } },
+        },
+      },
+    })
+    const groups = listEnabledModelGroups(config, [], {
+      connections: { 'opencode-go': { hasCredential: true, hasEndpoint: false } },
+    })
+    expect(groups[0]?.provider.id).toBe('opencode-go')
+    expect(groups[0]?.models.map((model) => model.id)).toEqual(['kimi-k3'])
+  })
 })
 
 describe('providerInfoFromEnabledConfig', () => {

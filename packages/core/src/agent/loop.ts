@@ -37,6 +37,8 @@ export type AgentLoopOptions = {
   session?: AgentLoopSession
   /** Provider-specific options forwarded to streamText (e.g. reasoning effort). */
   providerOptions?: Parameters<typeof streamText>[0]['providerOptions']
+  /** Per-request HTTP headers (OpenCode session identity, User-Agent, …). */
+  headers?: Record<string, string>
   onContextOverflow?: (
     error: unknown,
   ) => Promise<{ messages: ModelMessage[]; system?: string } | null>
@@ -144,6 +146,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         stopWhen,
         abortSignal: options.abortSignal,
         providerOptions: options.providerOptions,
+        headers: options.headers,
       })
       streamResult = await processFullStream(result.fullStream, {
         onEvent,

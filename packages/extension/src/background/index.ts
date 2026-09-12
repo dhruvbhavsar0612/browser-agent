@@ -16,6 +16,7 @@ import { registerAgentHandlers } from './handlers/agent.js'
 import { registerOAuthHandlers } from './handlers/oauth.js'
 import { registerMcpHandlers } from './handlers/mcp.js'
 import { registerSettingsHandlers } from './handlers/settings.js'
+import { installOpenCodeUserAgentRule } from './opencode-headers.js'
 
 const storage = createChromeStorage()
 const config = new ConfigService(storage)
@@ -31,7 +32,10 @@ const bus = createMessageBus()
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
   void config.get()
+  void installOpenCodeUserAgentRule()
 })
+
+void installOpenCodeUserAgentRule()
 
 chrome.runtime.onSuspend.addListener(() => {
   void mcp.closeAll()

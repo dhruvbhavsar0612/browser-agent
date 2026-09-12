@@ -167,10 +167,57 @@ describe('settings handlers', () => {
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://opencode.ai/zen/go/v1/models',
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer sk-zen' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer sk-zen',
+          'User-Agent': expect.stringMatching(/^browser-agent\//),
+          'x-opencode-session': 'models-discover',
+        }),
       }),
     )
 
+    fetchSpy.mockRestore()
+  })
+
+  it('discovers OpenCode Go models from the default Zen/Go endpoint', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/models')) {
+        return Response.json({
+          object: 'list',
+          data: [{ id: 'kimi-k3', object: 'model', owned_by: 'opencode' }],
+        })
+      }
+      return Response.json(getBundledSnapshot())
+    })
+
+    await config.set({
+      provider: {
+        'opencode-go': {
+          enabled: true,
+        },
+      },
+    })
+    await vault.set('opencode-go', 'sk-zen')
+
+    const discovered = await dispatchSettingsMessage(
+      bus,
+      createRequest('models.discover', { providerId: 'opencode-go' }),
+    )
+    expect(discovered.type).toBe('models.discover')
+    expect(
+      (discovered.payload as { provider: { id: string; models: { id: string }[] } }).provider.models.map(
+        (model) => model.id,
+      ),
+    ).toEqual(['kimi-k3'])
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://opencode.ai/zen/go/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer sk-zen',
+          'x-opencode-session': 'models-discover',
+        }),
+      }),
+    )
     fetchSpy.mockRestore()
   })
 

@@ -233,4 +233,29 @@ describe('resolveReasoningProviderOptions', () => {
       resolveReasoningProviderOptions('openai-compatible', { enabled: true, reasoning_effort: 'medium' }),
     ).toBeUndefined()
   })
+
+  it('maps OpenCode Go model families onto native SDK options', () => {
+    expect(
+      resolveReasoningProviderOptions(
+        'opencode-go',
+        { enabled: true, reasoning_effort: 'medium' },
+        { modelID: 'grok-4.6', sessionID: 'sess-1' },
+      ),
+    ).toEqual({
+      openai: { reasoningEffort: 'medium', promptCacheKey: 'sess-1' },
+    })
+    expect(
+      resolveReasoningProviderOptions(
+        'opencode-go',
+        { enabled: true, reasoning_effort: 'high' },
+        { modelID: 'qwen3.8-flash' },
+      ),
+    ).toMatchObject({ anthropic: { thinking: { type: 'enabled', budgetTokens: 16000 } } })
+  })
+
+  it('enables MiniMax adaptive thinking by default on OpenCode Go', () => {
+    expect(
+      resolveReasoningProviderOptions('opencode-go', { enabled: true }, { modelID: 'minimax-m3' }),
+    ).toEqual({ anthropic: { thinking: { type: 'adaptive' } } })
+  })
 })

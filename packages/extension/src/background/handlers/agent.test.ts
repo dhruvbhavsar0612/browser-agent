@@ -95,8 +95,14 @@ describe('agent handlers', () => {
       ' world',
       'done',
     ])
-    expect(port.postMessage).toHaveBeenCalled()
-    expect(runAgentLoop).toHaveBeenCalled()
+    expect(getModel).toHaveBeenCalled()
+    expect(runAgentLoop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'User-Agent': expect.stringMatching(/^browser-agent\//),
+        }),
+      }),
+    )
   })
 
   it('reconstructs session context from the durable transcript plus newest user message', async () => {
@@ -279,7 +285,11 @@ describe('agent handlers', () => {
     expect(getModel).toHaveBeenCalledWith(
       'openai',
       'gpt-session',
-      expect.objectContaining({ apiKey: 'sk-test' }),
+      expect.objectContaining({
+        apiKey: 'sk-test',
+        sessionID: session.id,
+        requestID: expect.any(String),
+      }),
     )
   })
 

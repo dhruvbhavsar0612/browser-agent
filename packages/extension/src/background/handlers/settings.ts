@@ -7,8 +7,12 @@ import {
   fetchOpenAICompatibleModels,
   generateText,
   getModel,
+  isCredentialProviderId,
   isModelEnabled,
+  isOpenCodeProviderId,
+  OPENCODE_PROVIDER_DEFAULTS,
   providerInfoFromEnabledConfig,
+  resolveProviderBaseURL,
   type Envelope,
   type ModelDiscoverySource,
   type ProviderDiscoveryResult,
@@ -18,6 +22,8 @@ import {
 import type { MessageBus } from '../bus.js'
 
 export const SETTINGS_PROVIDERS = [
+  'opencode-go',
+  'opencode',
   'anthropic',
   'openai',
   'google',
@@ -63,8 +69,11 @@ async function resolveModelOptions(
 
   return {
     apiKey: cred ? credentialSecretToApiKey(cred.secret, cred.type) : undefined,
-    baseURL: providerCfg?.api ?? options?.baseURL,
-    name: providerCfg?.name ?? providerID,
+    baseURL: resolveProviderBaseURL(providerID, providerCfg?.api ?? options?.baseURL),
+    name:
+      providerCfg?.name ??
+      OPENCODE_PROVIDER_DEFAULTS[providerID as keyof typeof OPENCODE_PROVIDER_DEFAULTS]?.name ??
+      providerID,
     headers: providerCfg?.options?.headers,
   }
 }
@@ -123,7 +132,7 @@ export async function listConnectedProviders(deps: {
 
   for (const [providerID, providerConfig] of Object.entries(config.provider)) {
     if (!providerConfig.enabled) continue
-    const connected = MODELS_DEV_PROVIDERS.has(providerID)
+    const connected = isCredentialProviderId(providerID)
       ? credentialProviders.has(providerID)
       : Boolean(
           providerConfig.api ??
@@ -167,13 +176,15 @@ export async function discoverProviderModels(
     throw new Error(`Enable provider "${providerID}" before discovering models`)
   }
 
-  if (MODELS_DEV_PROVIDERS.has(providerID)) {
+  if (MODELS_DEV_PROVIDERS.has(providerID) || isOpenCodeProviderId(providerID)) {
     if (!(await deps.vault.get(providerID))) {
       throw new Error(`Connect provider "${providerID}" before discovering models`)
     }
-    return deps.models.discoverProvider(providerID, {
-      forceRefresh: opts?.forceRefresh,
-    })
+    if (MODELS_DEV_PROVIDERS.has(providerID)) {
+      return deps.models.discoverProvider(providerID, {
+        forceRefresh: opts?.forceRefresh,
+      })
+    }
   }
 
   return loadCompatibleModels({
@@ -194,7 +205,11 @@ export async function runModelTest(
       throw new Error(`Model "${providerID}/${modelID}" is not enabled`)
     }
     const options = await resolveModelOptions(providerID, deps.vault, deps.config)
-    const model = await getModel(providerID, modelID, options)
+    const model = await getModel(providerID, modelID, {
+      ...options,
+      sessionID: 'model-test',
+      requestID: 'model-test',
+    })
     const result = await generateText({
       model,
       prompt: 'ping',

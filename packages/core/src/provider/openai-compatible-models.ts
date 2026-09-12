@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { ModelInfo, ProviderInfo } from './index.js'
+import { buildProviderRequestHeaders } from './identity.js'
 
 const OpenAIModelSchema = z
   .object({
@@ -68,7 +69,12 @@ export async function fetchOpenAICompatibleModels(
   const fetchImpl = options.fetchImpl ?? fetch
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    ...options.headers,
+    ...buildProviderRequestHeaders({
+      providerID: options.providerID ?? 'openai-compatible',
+      baseURL: options.baseURL,
+      sessionID: 'models-discover',
+      headers: options.headers,
+    }),
   }
   if (options.apiKey?.trim()) {
     headers.Authorization = `Bearer ${options.apiKey.trim()}`

@@ -1,4 +1,5 @@
 import type { ModelInfo, ProviderInfo } from '../provider/index.js'
+import { isCatalogProviderId, isCredentialProviderId } from '../provider/identity.js'
 import { isModelEnabled, type AppConfig } from './schema.js'
 
 export type EnabledModelGroup = {
@@ -12,10 +13,8 @@ export type ProviderConnection = {
   hasEndpoint: boolean
 }
 
-const CATALOG_PROVIDER_IDS = new Set(['anthropic', 'openai', 'google', 'openrouter'])
-
 export function isCatalogProvider(providerID: string): boolean {
-  return CATALOG_PROVIDER_IDS.has(providerID)
+  return isCatalogProviderId(providerID)
 }
 
 /** Whether a provider is connected enough to expose models in pickers. */
@@ -27,14 +26,13 @@ export function isProviderConnected(
   const providerConfig = config.provider[providerID]
   if (!providerConfig?.enabled) return false
 
-  if (isCatalogProvider(providerID)) {
+  if (isCredentialProviderId(providerID)) {
     return connection?.hasCredential === true
   }
 
   if (connection?.hasEndpoint) return true
   return Boolean(
-    providerConfig.api ??
-      (providerConfig.options as { baseURL?: string } | undefined)?.baseURL,
+    providerConfig.api ?? (providerConfig.options as { baseURL?: string } | undefined)?.baseURL,
   )
 }
 

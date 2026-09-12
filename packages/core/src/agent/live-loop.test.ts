@@ -17,6 +17,8 @@ describe.runIf(Boolean(KEY))('live agent loop', () => {
       const model = await getModel('openai-compatible', MODEL, {
         apiKey: KEY,
         baseURL: BASE,
+        sessionID: 'live-test',
+        requestID: 'live-test',
       })
       const ruleset = fromConfig({ echo: 'allow', get_time: 'allow', '*': 'ask' })
       const tools = toAiSdkTools(filterToolsByPermission(listTools(), ruleset), {
@@ -72,6 +74,8 @@ describe.runIf(Boolean(KEY))('live agent loop', () => {
       const model = await getModel('openai-compatible', MODEL, {
         apiKey: KEY,
         baseURL: BASE,
+        sessionID: 'live-test',
+        requestID: 'live-test',
       })
       await runAgentLoop({
         model,

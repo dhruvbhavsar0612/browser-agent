@@ -44,3 +44,27 @@ export {
   toOpenAICompatibleProvider,
 } from './openai-compatible-models.js'
 export type { FetchOpenAICompatibleModelsOptions } from './openai-compatible-models.js'
+
+export {
+  CATALOG_PROVIDER_IDS,
+  CLIENT_CHANNEL,
+  CLIENT_ID,
+  CLIENT_USER_AGENT,
+  CLIENT_VERSION,
+  DEFAULT_PROVIDER_BASE_URLS,
+  OPENCODE_PROVIDER_DEFAULTS,
+  OPENCODE_PROVIDER_IDS,
+  applyRequestHeaders,
+  buildProviderRequestHeaders,
+  isCatalogProviderId,
+  isCredentialProviderId,
+  isOpenCodeEndpoint,
+  isOpenCodeProviderId,
+  resolveProviderBaseURL,
+  usesOpenCodeProtocol,
+  wrapFetchWithHeaders,
+} from './identity.js'
+export type { OpenCodeProviderId, ProviderRequestIdentity } from './identity.js'
+
+export { resolveLanguageModelSdk, resolveOpenCodeModelSdk } from './model-api.js'
+export type { LanguageModelSdk } from './model-api.js'

@@ -45,6 +45,7 @@ export default defineManifest({
     'offscreen',
     'clipboardRead',
     'clipboardWrite',
+    'declarativeNetRequest',
   ],
   // `<all_urls>` is required for chrome.tabs.captureVisibleTab without an
   // activeTab user gesture (agent-driven screenshots). CDP Page.captureScreenshot

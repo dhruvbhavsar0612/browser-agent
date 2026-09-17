@@ -3,6 +3,7 @@ import {
   SENSITIVE_DEFAULT_RULES,
   evaluate,
   fromConfig,
+  isCredentialProviderId,
   listEnabledModelGroups,
   rulesForExecutionMode,
   type AppConfigType,
@@ -17,6 +18,20 @@ import { RemoteMcpSettings } from './RemoteMcpSettings.js'
 import './Settings.css'
 
 const KEY_PROVIDERS = [
+  {
+    id: 'opencode-go',
+    label: 'OpenCode Go',
+    oauth: false as const,
+    keyHint: 'Low-cost open coding models. Subscribe at opencode.ai, then paste your API key.',
+    keyLink: 'https://opencode.ai/docs/go',
+  },
+  {
+    id: 'opencode',
+    label: 'OpenCode Zen',
+    oauth: false as const,
+    keyHint: 'OpenCode Zen models. Get an API key from the OpenCode console.',
+    keyLink: 'https://opencode.ai/docs/zen',
+  },
   { id: 'anthropic', label: 'Anthropic', oauth: true as const, oauthLabel: 'Claude' },
   { id: 'openai', label: 'OpenAI', oauth: true as const, oauthLabel: 'ChatGPT' },
   {
@@ -29,8 +44,6 @@ const KEY_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter', oauth: false as const },
   { id: 'openai-compatible', label: 'OpenAI-compatible', oauth: false as const },
 ] as const
-
-const CATALOG_PROVIDER_IDS = new Set(['anthropic', 'openai', 'google', 'openrouter'])
 
 const NAV_SECTIONS = [
   { id: 'providers', label: 'Providers' },
@@ -85,6 +98,7 @@ export function SettingsView() {
   const [config, setConfig] = useState<AppConfigType | null>(null)
   const [keyInputs, setKeyInputs] = useState<Partial<Record<KeyProviderId, string>>>({})
   const [baseURL, setBaseURL] = useState('')
+  const [customHeadersJson, setCustomHeadersJson] = useState('')
   const [customURLs, setCustomURLs] = useState<Record<string, string>>({})
   const [customDraft, setCustomDraft] = useState({ id: '', name: '', api: '' })
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
@@ -176,6 +190,12 @@ export function SettingsView() {
           (cfg.provider['openai-compatible']?.options as { baseURL?: string } | undefined)
             ?.baseURL ??
           '',
+      )
+      const compatibleHeaders = cfg.provider['openai-compatible']?.options?.headers
+      setCustomHeadersJson(
+        compatibleHeaders && Object.keys(compatibleHeaders).length > 0
+          ? JSON.stringify(compatibleHeaders, null, 2)
+          : '',
       )
       setCustomURLs(
         Object.fromEntries(
@@ -272,8 +292,8 @@ export function SettingsView() {
           hasCredential: hasAnyCredential(vaultEntries, providerId),
           hasEndpoint: Boolean(
             config.provider[providerId]?.api ??
-              (config.provider[providerId]?.options as { baseURL?: string } | undefined)?.baseURL ??
-              (providerId === 'openai-compatible' ? baseURL.trim() : customURLs[providerId]?.trim()),
+            (config.provider[providerId]?.options as { baseURL?: string } | undefined)?.baseURL ??
+            (providerId === 'openai-compatible' ? baseURL.trim() : customURLs[providerId]?.trim()),
           ),
         },
       ]),
@@ -304,6 +324,42 @@ export function SettingsView() {
     } finally {
       setSavingKey(null)
     }
+  }
+
+  async function saveCustomHeaders() {
+    if (!config) return
+    const raw = customHeadersJson.trim()
+    let headers: Record<string, string> | null = null
+    if (raw) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        throw new Error('Custom headers must be valid JSON (object of string values)')
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Custom headers must be a JSON object')
+      }
+      headers = Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).map(([name, value]) => {
+          if (typeof value !== 'string') {
+            throw new Error(`Header "${name}" must be a string value`)
+          }
+          return [name, value]
+        }),
+      )
+    }
+    const response = await sendRequest('config.set', {
+      provider: {
+        'openai-compatible': {
+          options: { headers: headers ?? {} },
+        },
+      },
+    })
+    if (response.type === 'error') {
+      throw new Error(String((response.payload as { message?: string })?.message))
+    }
+    setConfig(response.payload as AppConfigType)
   }
 
   async function saveBaseURL() {
@@ -358,7 +414,7 @@ export function SettingsView() {
         })
       }
       if (enabled) {
-        const connected = CATALOG_PROVIDER_IDS.has(providerId)
+        const connected = isCredentialProviderId(providerId)
           ? hasAnyCredential(vaultEntries, providerId)
           : Boolean(
               next.provider[providerId]?.api ??
@@ -643,7 +699,7 @@ export function SettingsView() {
       setVaultEntries([])
       if (
         config?.model &&
-        CATALOG_PROVIDER_IDS.has(config.model.slice(0, config.model.indexOf('/')))
+        isCredentialProviderId(config.model.slice(0, config.model.indexOf('/')))
       ) {
         const configResponse = await sendRequest('config.set', { model: null })
         if (configResponse.type !== 'error') {
@@ -732,7 +788,9 @@ export function SettingsView() {
     <div className="settings">
       <div className="settings-header">
         <h1>Settings</h1>
-        <p className="settings-lede">Bring your own API keys. Secrets stay encrypted in local storage only.</p>
+        <p className="settings-lede">
+          Bring your own API keys. Secrets stay encrypted in local storage only.
+        </p>
       </div>
 
       {error ? <p className="settings-error">{error}</p> : null}
@@ -810,12 +868,14 @@ export function SettingsView() {
                   <div className="settings-provider-step">
                     <span className="settings-step-badge settings-step-badge-muted">B</span>
                     <div className="settings-step-body">
-                      {provider.id === 'google' ? (
+                      {'keyHint' in provider && provider.keyHint ? (
                         <p className="settings-hint">
-                          Gemini models via Google AI Studio.{' '}
-                          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-                            Get an API key
-                          </a>
+                          {provider.keyHint}{' '}
+                          {'keyLink' in provider && provider.keyLink ? (
+                            <a href={provider.keyLink} target="_blank" rel="noreferrer">
+                              Docs
+                            </a>
+                          ) : null}
                         </p>
                       ) : null}
 
@@ -826,7 +886,7 @@ export function SettingsView() {
                             id="base-url"
                             className="settings-input"
                             type="url"
-                            placeholder="https://opencode.ai/zen/go/v1"
+                            placeholder="http://127.0.0.1:11434/v1"
                             value={baseURL}
                             onChange={(e) => setBaseURL(e.target.value)}
                             onBlur={() =>
@@ -837,6 +897,30 @@ export function SettingsView() {
                           />
                           <p className="settings-hint">
                             Models are loaded from <code>{'{baseURL}'}/models</code> after you save.
+                            For OpenCode Go/Zen, use the dedicated providers above so session
+                            headers and the correct API (chat, messages, or responses) are sent.
+                          </p>
+                          <label className="settings-field" htmlFor="compatible-headers">
+                            Extra request headers (optional)
+                          </label>
+                          <textarea
+                            id="compatible-headers"
+                            className="settings-input settings-textarea"
+                            rows={3}
+                            placeholder={'{\n  "X-Custom-Header": "value"\n}'}
+                            value={customHeadersJson}
+                            onChange={(event) => setCustomHeadersJson(event.target.value)}
+                            onBlur={() =>
+                              void saveCustomHeaders().catch((err) =>
+                                setError(err instanceof Error ? err.message : String(err)),
+                              )
+                            }
+                          />
+                          <p className="settings-hint">
+                            Merged into every chat and <code>/models</code> request for this
+                            provider. OpenCode Go/Zen session headers are added automatically when
+                            the base URL is on opencode.ai. Do not put secrets here — use the API
+                            key field.
                           </p>
                         </div>
                       ) : null}
@@ -917,8 +1001,7 @@ export function SettingsView() {
                                   type="button"
                                   className="settings-btn settings-btn-primary"
                                   disabled={
-                                    !oauthPaste[provider.id]?.trim() ||
-                                    oauthBusy === provider.id
+                                    !oauthPaste[provider.id]?.trim() || oauthBusy === provider.id
                                   }
                                   onClick={() => void completeOAuth(provider.id)}
                                 >
@@ -985,9 +1068,7 @@ export function SettingsView() {
                           <button
                             type="button"
                             className="settings-btn"
-                            disabled={
-                              !enabled || !connected || refreshingProvider === provider.id
-                            }
+                            disabled={!enabled || !connected || refreshingProvider === provider.id}
                             onClick={() =>
                               void refreshModels(provider.id).catch((err) =>
                                 setError(err instanceof Error ? err.message : String(err)),
@@ -1125,8 +1206,8 @@ export function SettingsView() {
             <div className="settings-subsection">
               <h3 className="settings-subsection-title">Custom &amp; local providers</h3>
               <p className="settings-hint">
-                OpenAI-compatible endpoints discover models from{' '}
-                <code>{'{baseURL}'}/models</code>. API keys are optional for local servers.
+                OpenAI-compatible endpoints discover models from <code>{'{baseURL}'}/models</code>.
+                API keys are optional for local servers.
               </p>
               <div className="settings-provider">
                 <div className="settings-field">
@@ -1323,8 +1404,7 @@ export function SettingsView() {
                           />
                           <div className="settings-model-list">
                             {visibleModels.map((model) => {
-                              const modelEnabled =
-                                providerConfig.models[model.id]?.enabled === true
+                              const modelEnabled = providerConfig.models[model.id]?.enabled === true
                               const currentEffort =
                                 providerConfig.models[model.id]?.reasoning_effort
                               return (
@@ -1510,15 +1590,15 @@ export function SettingsView() {
                     <label htmlFor="compaction-threshold">
                       Threshold
                       <span className="settings-field-note">
-                        {Math.round((compactionDraft.threshold ?? 0.72) * 100)}% — compact when
-                        this fraction of context is used (0.70–0.75)
+                        {Math.round((compactionDraft.threshold ?? 0.72) * 100)}% — compact when this
+                        fraction of context is used (0.70–0.75)
                       </span>
                     </label>
                     <input
                       id="compaction-threshold"
                       className="settings-input"
                       type="number"
-                      min={0.70}
+                      min={0.7}
                       max={0.75}
                       step={0.01}
                       value={compactionDraft.threshold}
@@ -1544,9 +1624,7 @@ export function SettingsView() {
                       value={compactionDraft.recentTurns}
                       onChange={(e) =>
                         setCompactionDraft((prev) =>
-                          prev
-                            ? { ...prev, recentTurns: parseInt(e.target.value, 10) }
-                            : prev,
+                          prev ? { ...prev, recentTurns: parseInt(e.target.value, 10) } : prev,
                         )
                       }
                     />
@@ -1566,9 +1644,7 @@ export function SettingsView() {
                       value={compactionDraft.reserveTokens}
                       onChange={(e) =>
                         setCompactionDraft((prev) =>
-                          prev
-                            ? { ...prev, reserveTokens: parseInt(e.target.value, 10) }
-                            : prev,
+                          prev ? { ...prev, reserveTokens: parseInt(e.target.value, 10) } : prev,
                         )
                       }
                     />
@@ -1766,8 +1842,8 @@ function SiteRulesSection({
       <div className="settings-section-heading">
         <h2>Permissions</h2>
         <p className="settings-section-desc">
-          URL globs per tool. Sensitive paths (checkout / payment / login) are denied by default
-          and always win.
+          URL globs per tool. Sensitive paths (checkout / payment / login) are denied by default and
+          always win.
         </p>
       </div>
 

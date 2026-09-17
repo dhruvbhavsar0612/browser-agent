@@ -10,7 +10,15 @@ import {
 describe('provider factory', () => {
   it('exposes bundled provider loaders', () => {
     expect(Object.keys(BUNDLED_PROVIDERS).sort()).toEqual(
-      ['anthropic', 'google', 'openai', 'openai-compatible', 'openrouter'].sort(),
+      [
+        'anthropic',
+        'google',
+        'openai',
+        'openai-compatible',
+        'opencode',
+        'opencode-go',
+        'openrouter',
+      ].sort(),
     )
   })
 
@@ -96,5 +104,30 @@ describe('provider factory', () => {
 
   it('rejects unknown providers without baseURL', async () => {
     await expect(getModel('nope', 'model')).rejects.toBeInstanceOf(UnknownProviderError)
+  })
+
+  it('requires an API key for OpenCode Go', async () => {
+    await expect(getModel('opencode-go', 'kimi-k3')).rejects.toBeInstanceOf(MissingApiKeyError)
+  })
+
+  it('routes OpenCode Go models onto native AI SDK APIs', async () => {
+    const chat = await getModel('opencode-go', 'kimi-k3', { apiKey: 'sk-zen' })
+    expect(chat).toHaveProperty('modelId', 'kimi-k3')
+
+    const messages = await getModel('opencode-go', 'minimax-m3', { apiKey: 'sk-zen' })
+    expect(messages).toHaveProperty('modelId', 'minimax-m3')
+    expect(String((messages as { provider?: string }).provider)).toMatch(/anthropic/)
+
+    const responses = await getModel('opencode-go', 'grok-4.6', { apiKey: 'sk-zen' })
+    expect(responses).toHaveProperty('modelId', 'grok-4.6')
+    expect(String((responses as { provider?: string }).provider)).toMatch(/openai/)
+  })
+
+  it('routes openai-compatible OpenCode URLs the same way as opencode-go', async () => {
+    const model = await getModel('openai-compatible', 'minimax-m3', {
+      apiKey: 'sk-zen',
+      baseURL: 'https://opencode.ai/zen/go/v1',
+    })
+    expect(String((model as { provider?: string }).provider)).toMatch(/anthropic/)
   })
 })

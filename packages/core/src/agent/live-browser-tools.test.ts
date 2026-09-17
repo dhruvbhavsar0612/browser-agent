@@ -87,6 +87,8 @@ describe.runIf(Boolean(KEY))('live Sprint 3 browser tools', () => {
       const model = await getModel('openai-compatible', MODEL, {
         apiKey: KEY,
         baseURL: BASE,
+        sessionID: 'live-s3',
+        requestID: 'live-s3',
       })
       const ruleset = fromConfig(DEFAULT_CONFIG.agent.browse!.permission!)
       const browser = createLiveFakeBridge()
@@ -147,6 +149,8 @@ describe.runIf(Boolean(KEY))('live Sprint 3 browser tools', () => {
       const model = await getModel('openai-compatible', MODEL, {
         apiKey: KEY,
         baseURL: BASE,
+        sessionID: 'live-s3',
+        requestID: 'live-s3',
       })
       const ruleset = fromConfig(DEFAULT_CONFIG.agent.browse!.permission!)
       const tools = toAiSdkTools(filterToolsByPermission(listTools(), ruleset), {

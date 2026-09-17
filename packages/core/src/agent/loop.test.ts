@@ -191,27 +191,70 @@ describe('runAgentLoop', () => {
       'text-delta',
       'segment-end',
       'error',
+      'done',
     ])
     expect(events.find((event) => event.kind === 'text-delta')).toMatchObject({ text: 'Partial' })
-    expect(events.at(-1)).toEqual({ kind: 'error', message: 'context length exceeded' })
+    expect(events.find((event) => event.kind === 'error')).toEqual({
+      kind: 'error',
+      message: 'context length exceeded',
+    })
+  })
+
+  it('emits done after a stream abort part when the run was not user-aborted', async () => {
+    mockFullStream([
+      { type: 'text-delta', id: 't1', text: 'READY' },
+      { type: 'text-end', id: 't1' },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        totalUsage: {} as never,
+      },
+      { type: 'abort' },
+    ])
+
+    const events: StreamEvent[] = []
+    await runAgentLoop({
+      model: {} as never,
+      messages: [{ role: 'user', content: 'Reply READY' }],
+      onEvent: (event) => events.push(event),
+    })
+
+    expect(events.some((event) => event.kind === 'text-delta')).toBe(true)
+    expect(events.some((event) => event.kind === 'done')).toBe(true)
   })
 
   it('forwards providerOptions to streamText', async () => {
     mockFullStream([
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
     ])
-
     const providerOptions = { openai: { reasoningEffort: 'high' } }
     await runAgentLoop({
       model: {} as never,
-      messages: [{ role: 'user', content: 'Think hard' }],
-      onEvent: () => {},
+      messages: [{ role: 'user', content: 'Hi' }],
+      onEvent: () => undefined,
       providerOptions,
     })
-
     expect(streamTextMock).toHaveBeenCalledWith(
       expect.objectContaining({ providerOptions }),
     )
+  })
+
+  it('forwards OpenCode session headers to streamText', async () => {
+    mockFullStream([
+      { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: {} as never },
+    ])
+    const headers = {
+      'User-Agent': 'browser-agent/1.0',
+      'x-opencode-session': 'sess-1',
+    }
+    await runAgentLoop({
+      model: {} as never,
+      messages: [{ role: 'user', content: 'Hi' }],
+      onEvent: () => undefined,
+      headers,
+    })
+    expect(streamTextMock).toHaveBeenCalledWith(expect.objectContaining({ headers }))
   })
 
   it('omits providerOptions from streamText when not set', async () => {

@@ -15,7 +15,9 @@ import {
   parseModelRef,
   prepareSessionPrompt,
   resolveModelRef,
+  resolveProviderBaseURL,
   resolveReasoningProviderOptions,
+  buildProviderRequestHeaders,
   runAgentLoop,
   toAiSdkTools,
   toModelMessages,
@@ -158,18 +160,33 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
 
       const credential = await deps.vault.get(modelRef.providerID)
       const providerConfig = appConfig.provider[modelRef.providerID]
+      const sessionId = payload.sessionId ?? requestId
+      const baseURL = resolveProviderBaseURL(modelRef.providerID, providerConfig?.api)
+      const requestHeaders = buildProviderRequestHeaders({
+        providerID: modelRef.providerID,
+        baseURL,
+        sessionID: sessionId,
+        requestID: requestId,
+        headers: providerConfig?.options?.headers,
+      })
 
       const model = await getModel(modelRef.providerID, modelRef.modelID, {
         apiKey: credential
           ? credentialSecretToApiKey(credential.secret, credential.type)
           : undefined,
-        baseURL: providerConfig?.api,
+        baseURL,
         headers: providerConfig?.options?.headers,
         name: providerConfig?.name ?? modelRef.providerID,
+        sessionID: sessionId,
+        requestID: requestId,
       })
 
       const modelConfig = providerConfig?.models[modelRef.modelID]
-      const providerOptions = resolveReasoningProviderOptions(modelRef.providerID, modelConfig)
+      const providerOptions = resolveReasoningProviderOptions(modelRef.providerID, modelConfig, {
+        modelID: modelRef.modelID,
+        baseURL,
+        sessionID: sessionId,
+      })
 
       const ruleset = buildRunRuleset({
         executionMode: appConfig.executionMode,
@@ -187,7 +204,6 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         })
       })
 
-      const sessionId = payload.sessionId ?? requestId
       if (payload.tabId != null) {
         bindSessionTab(sessionId, payload.tabId)
         void createGroupForSession(sessionId, payload.tabId)
@@ -266,13 +282,16 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
             }
             const smallCredential = await deps.vault.get(smallRef.providerID)
             const smallProvider = appConfig.provider[smallRef.providerID]
+            const smallBaseURL = resolveProviderBaseURL(smallRef.providerID, smallProvider?.api)
             summaryModel = await getModel(smallRef.providerID, smallRef.modelID, {
               apiKey: smallCredential
                 ? credentialSecretToApiKey(smallCredential.secret, smallCredential.type)
                 : undefined,
-              baseURL: smallProvider?.api,
+              baseURL: smallBaseURL,
               headers: smallProvider?.options?.headers,
               name: smallProvider?.name ?? smallRef.providerID,
+              sessionID: sessionId,
+              requestID: requestId,
             })
           } catch {
             summaryModel = model
@@ -329,6 +348,7 @@ export function registerAgentHandlers(bus: MessageBus, deps: AgentHandlerDeps): 
         steps: agentInfo?.steps ?? 5,
         abortSignal: controller.signal,
         providerOptions: providerOptions as Parameters<typeof runAgentLoop>[0]['providerOptions'],
+        headers: requestHeaders,
         onEvent: push,
         session:
           payload.sessionId && deps.sessions

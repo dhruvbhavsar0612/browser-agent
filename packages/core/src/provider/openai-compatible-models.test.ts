@@ -58,6 +58,8 @@ describe('fetchOpenAICompatibleModels', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer sk-test',
           Accept: 'application/json',
+          'User-Agent': expect.stringMatching(/^browser-agent\//),
+          'x-opencode-session': 'models-discover',
         }),
       }),
     )

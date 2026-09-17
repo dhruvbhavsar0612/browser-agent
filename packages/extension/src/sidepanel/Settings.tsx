@@ -98,6 +98,7 @@ export function SettingsView() {
   const [config, setConfig] = useState<AppConfigType | null>(null)
   const [keyInputs, setKeyInputs] = useState<Partial<Record<KeyProviderId, string>>>({})
   const [baseURL, setBaseURL] = useState('')
+  const [customHeadersJson, setCustomHeadersJson] = useState('')
   const [customURLs, setCustomURLs] = useState<Record<string, string>>({})
   const [customDraft, setCustomDraft] = useState({ id: '', name: '', api: '' })
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
@@ -189,6 +190,12 @@ export function SettingsView() {
           (cfg.provider['openai-compatible']?.options as { baseURL?: string } | undefined)
             ?.baseURL ??
           '',
+      )
+      const compatibleHeaders = cfg.provider['openai-compatible']?.options?.headers
+      setCustomHeadersJson(
+        compatibleHeaders && Object.keys(compatibleHeaders).length > 0
+          ? JSON.stringify(compatibleHeaders, null, 2)
+          : '',
       )
       setCustomURLs(
         Object.fromEntries(
@@ -317,6 +324,42 @@ export function SettingsView() {
     } finally {
       setSavingKey(null)
     }
+  }
+
+  async function saveCustomHeaders() {
+    if (!config) return
+    const raw = customHeadersJson.trim()
+    let headers: Record<string, string> | null = null
+    if (raw) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        throw new Error('Custom headers must be valid JSON (object of string values)')
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Custom headers must be a JSON object')
+      }
+      headers = Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).map(([name, value]) => {
+          if (typeof value !== 'string') {
+            throw new Error(`Header "${name}" must be a string value`)
+          }
+          return [name, value]
+        }),
+      )
+    }
+    const response = await sendRequest('config.set', {
+      provider: {
+        'openai-compatible': {
+          options: { headers: headers ?? {} },
+        },
+      },
+    })
+    if (response.type === 'error') {
+      throw new Error(String((response.payload as { message?: string })?.message))
+    }
+    setConfig(response.payload as AppConfigType)
   }
 
   async function saveBaseURL() {
@@ -856,6 +899,28 @@ export function SettingsView() {
                             Models are loaded from <code>{'{baseURL}'}/models</code> after you save.
                             For OpenCode Go/Zen, use the dedicated providers above so session
                             headers and the correct API (chat, messages, or responses) are sent.
+                          </p>
+                          <label className="settings-field" htmlFor="compatible-headers">
+                            Extra request headers (optional)
+                          </label>
+                          <textarea
+                            id="compatible-headers"
+                            className="settings-input settings-textarea"
+                            rows={3}
+                            placeholder={'{\n  "X-Custom-Header": "value"\n}'}
+                            value={customHeadersJson}
+                            onChange={(event) => setCustomHeadersJson(event.target.value)}
+                            onBlur={() =>
+                              void saveCustomHeaders().catch((err) =>
+                                setError(err instanceof Error ? err.message : String(err)),
+                              )
+                            }
+                          />
+                          <p className="settings-hint">
+                            Merged into every chat and <code>/models</code> request for this
+                            provider. OpenCode Go/Zen session headers are added automatically when
+                            the base URL is on opencode.ai. Do not put secrets here — use the API
+                            key field.
                           </p>
                         </div>
                       ) : null}

@@ -62,6 +62,15 @@
   line-height: 1.35;
 }
 
+.chat-send-hint {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .chat-messages {
   flex: 1;
   min-height: 0;

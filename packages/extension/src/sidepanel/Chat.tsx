@@ -80,12 +80,36 @@ export function ChatView({
 
   const selectedModelEnabled = useMemo(
     () =>
-      !selectedModel ||
+      Boolean(selectedModel) &&
       enabledModels.some(({ provider, models }) =>
         models.some((model) => `${provider.id}/${model.id}` === selectedModel),
       ),
     [enabledModels, selectedModel],
   )
+
+  const sendDisabledReason = useMemo((): string | null => {
+    if (streaming || loadingSession) return null
+    if (loadingModels) return 'Loading enabled models…'
+    if (!selectedModel) {
+      if (enabledModels.length === 0) {
+        return 'Connect a provider and enable at least one model in Settings.'
+      }
+      return 'Choose a model in the dropdown above.'
+    }
+    if (!selectedModelEnabled) {
+      return 'This model is disabled or its provider is disconnected. Pick another model or fix Settings.'
+    }
+    if (!input.trim()) return 'Type a message to send.'
+    return null
+  }, [
+    enabledModels.length,
+    input,
+    loadingModels,
+    loadingSession,
+    selectedModel,
+    selectedModelEnabled,
+    streaming,
+  ])
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -132,7 +156,12 @@ export function ChatView({
         const fallback = agentModel
           ? `${agentModel.providerID}/${agentModel.modelID}`
           : (nextConfig.model ?? '')
-        setSelectedModel(activeSession?.model ?? (!sessionId ? (nextConfig.model ?? '') : fallback))
+        const sessionModel = activeSession?.model?.trim()
+        const defaultForNewChat = nextConfig.model?.trim() ?? ''
+        setSelectedModel(
+          sessionModel ||
+            (!sessionId ? defaultForNewChat : fallback.trim() || defaultForNewChat),
+        )
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
@@ -575,8 +604,9 @@ export function ChatView({
             </div>
             <h2>What can I help with?</h2>
             <p>
-              Connect and enable a provider in Settings, enable a model, then ask the agent to
-              act on, read, or navigate the current tab.
+              {enabledModels.length > 0
+                ? 'Pick a model above (or set a default in Settings), then ask the agent to read, navigate, or act on the current tab.'
+                : 'Open Settings → enable a provider (e.g. OpenCode Go), add your API key, enable a model, and set a default model if you like.'}
             </p>
           </div>
         ) : (
@@ -695,6 +725,12 @@ export function ChatView({
       ) : null}
 
       {error ? <div className="chat-error">{error}</div> : null}
+
+      {sendDisabledReason ? (
+        <div className="chat-send-hint" role="status">
+          {sendDisabledReason}
+        </div>
+      ) : null}
 
       <div className="chat-composer">
         <div className="chat-composer-inner">

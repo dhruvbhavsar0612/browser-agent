@@ -182,7 +182,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     Boolean(options.onContextOverflow),
   )
 
-  if (!options.abortSignal?.aborted && !streamResult.stopped) {
+  // Always finish the UI run unless the user aborted. Some providers (e.g. OpenCode Go)
+  // can end the AI SDK stream with `abort` or `stopped` after valid output; the side
+  // panel only clears "Agent working…" on `done` or `error`, not on agent.prompt ok.
+  if (!options.abortSignal?.aborted) {
     options.onEvent({ kind: 'done' })
   }
 

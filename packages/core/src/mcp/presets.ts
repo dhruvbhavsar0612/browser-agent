@@ -1,5 +1,18 @@
 export type McpServerPresetCategory = 'web-search' | 'docs' | 'devtools' | 'project' | 'other'
 
+export type McpServerPresetAuthMode = 'none' | 'bearer' | 'api-key' | 'oauth'
+
+/**
+ * A documented, non-secret authentication decision for a hosted MCP preset.
+ * `authMode` remains the creation default for compatibility; this metadata
+ * explains the approved alternatives without storing any credential material.
+ */
+export type McpServerPresetAuthStrategy = {
+  preferred: McpServerPresetAuthMode
+  alternatives: McpServerPresetAuthMode[]
+  setup: string
+}
+
 export type McpServerPreset = {
   id: string
   name: string
@@ -7,7 +20,8 @@ export type McpServerPreset = {
   category: McpServerPresetCategory
   url: string
   transport?: 'auto' | 'streamable-http' | 'sse'
-  authMode: 'none' | 'bearer' | 'api-key' | 'oauth'
+  authMode: McpServerPresetAuthMode
+  authStrategy: McpServerPresetAuthStrategy
   docsUrl?: string
   tags: string[]
   requiresUserUrl?: boolean
@@ -24,6 +38,12 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     url: 'https://mcp.context7.com/mcp',
     transport: 'streamable-http',
     authMode: 'none',
+    authStrategy: {
+      preferred: 'none',
+      alternatives: ['api-key'],
+      setup:
+        'Use anonymous access first. If Context7 issues a credential for higher limits, save it as an API-key vault secret; never add it to headers.',
+    },
     docsUrl: 'https://context7.com/docs/resources/all-clients',
     tags: ['documentation', 'libraries', 'code-examples', 'open-world'],
     setupHint:
@@ -36,10 +56,17 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     category: 'project',
     url: 'https://api.githubcopilot.com/mcp/',
     transport: 'streamable-http',
-    authMode: 'oauth',
+    authMode: 'bearer',
+    authStrategy: {
+      preferred: 'bearer',
+      alternatives: ['oauth'],
+      setup:
+        'Use a least-privilege GitHub fine-grained PAT as a bearer credential. OAuth requires a deployment that accepts dynamic registration or a provider-registered public client and redirect.',
+    },
     docsUrl: 'https://github.com/github/github-mcp-server',
     tags: ['git', 'github', 'repositories', 'pull-requests', 'issues'],
-    setupHint: 'Connect with OAuth, or switch to bearer auth if you prefer a GitHub PAT.',
+    setupHint:
+      'Recommended: save a least-privilege GitHub fine-grained PAT as the bearer credential. OAuth needs a supported deployment or a provider-registered public client and redirect.',
   },
   {
     id: 'linear',
@@ -49,9 +76,16 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     url: 'https://mcp.linear.app/mcp',
     transport: 'streamable-http',
     authMode: 'oauth',
+    authStrategy: {
+      preferred: 'oauth',
+      alternatives: [],
+      setup:
+        'Connect with OAuth when Linear accepts the extension callback, or configure a provider-registered public OAuth client and redirect.',
+    },
     docsUrl: 'https://linear.app/docs/mcp',
     tags: ['linear', 'issues', 'projects', 'planning', 'workspace', 'oauth'],
-    setupHint: 'Connect with OAuth to authorize access to your Linear workspace.',
+    setupHint:
+      'Connect with OAuth when Linear accepts the extension callback. Otherwise use a provider-registered public OAuth client and redirect; Browser Agent cannot host a callback.',
   },
   {
     id: 'notion',
@@ -62,9 +96,16 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     url: 'https://mcp.notion.com/mcp',
     transport: 'streamable-http',
     authMode: 'oauth',
+    authStrategy: {
+      preferred: 'oauth',
+      alternatives: [],
+      setup:
+        'Connect with OAuth when Notion accepts the extension callback, or configure a provider-registered public OAuth client and redirect.',
+    },
     docsUrl: 'https://developers.notion.com/guides/mcp/get-started-with-mcp',
     tags: ['notion', 'docs', 'workspace', 'databases', 'oauth'],
-    setupHint: 'Connect with OAuth and approve the workspace content this MCP server can access.',
+    setupHint:
+      'Connect with OAuth when Notion accepts the extension callback. Otherwise use a provider-registered public OAuth client and redirect; Browser Agent cannot host a callback.',
   },
   {
     id: 'sentry',
@@ -75,6 +116,12 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     url: 'https://mcp.sentry.dev/mcp',
     transport: 'streamable-http',
     authMode: 'oauth',
+    authStrategy: {
+      preferred: 'oauth',
+      alternatives: ['bearer', 'api-key'],
+      setup:
+        'Use OAuth when available. For a self-hosted or token-based Sentry deployment, save the provider-documented credential in the MCP vault instead of headers.',
+    },
     docsUrl: 'https://github.com/getsentry/sentry-mcp',
     tags: ['sentry', 'errors', 'observability', 'debugging', 'oauth'],
     setupHint:
@@ -88,6 +135,12 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
     url: '',
     transport: 'auto',
     authMode: 'none',
+    authStrategy: {
+      preferred: 'none',
+      alternatives: ['bearer', 'api-key', 'oauth'],
+      setup:
+        'Start with the provider-documented mode. Save bearer/API-key values only in the MCP vault; use OAuth when the remote server advertises OAuth metadata.',
+    },
     tags: ['custom', 'remote', 'https'],
     requiresUserUrl: true,
     setupHint:
@@ -96,7 +149,14 @@ const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
 ]
 
 function copyPreset(preset: McpServerPreset): McpServerPreset {
-  return { ...preset, tags: [...preset.tags] }
+  return {
+    ...preset,
+    authStrategy: {
+      ...preset.authStrategy,
+      alternatives: [...preset.authStrategy.alternatives],
+    },
+    tags: [...preset.tags],
+  }
 }
 
 export function listMcpPresets(): McpServerPreset[] {

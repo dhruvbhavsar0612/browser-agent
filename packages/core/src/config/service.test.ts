@@ -53,6 +53,45 @@ describe('ConfigService', () => {
     expect(cfg.provider.openai?.name).toBe('OpenAI')
   })
 
+  it('does not persist rejected OAuth redirect URI data', async () => {
+    const storage = createMemoryStorage()
+    const svc = new ConfigService(storage)
+    await svc.set({
+      mcp: {
+        oauth: {
+          url: 'https://mcp.example.com/mcp',
+          auth: {
+            mode: 'oauth',
+            oauth: {
+              clientId: 'provider-public-client',
+              redirectUrl: 'https://app.example.com/oauth/callback',
+            },
+          },
+        },
+      },
+    })
+
+    const invalidRedirect = 'https://app.example.com/oauth/callback?ACCESS_TOKEN=do-not-store'
+    await expect(
+      svc.set({
+        mcp: {
+          oauth: {
+            auth: {
+              oauth: {
+                clientId: 'provider-public-client',
+                redirectUrl: invalidRedirect,
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/sensitive query parameters/)
+
+    const raw = await storage.getLocal('browser-agent.config.local')
+    expect(JSON.stringify(raw)).not.toContain('do-not-store')
+    expect(JSON.stringify(raw)).toContain('https://app.example.com/oauth/callback')
+  })
+
   it('migrates sync config into local storage once', async () => {
     const storage = createMemoryStorage()
     await storage.setSync('browser-agent.config', {

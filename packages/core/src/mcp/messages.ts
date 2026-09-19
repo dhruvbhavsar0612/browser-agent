@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { McpServerConfig } from '../config/schema.js'
+import { McpOAuthPublicClientConfig, McpServerConfig } from '../config/schema.js'
 
 export const McpServerId = z
   .string()
@@ -17,7 +17,16 @@ export const McpServerCreatePayload = z.object({
 
 export const McpServerUpdatePayload = z.object({
   id: McpServerId,
-  patch: McpServerConfig.partial(),
+  patch: McpServerConfig.partial().extend({
+    auth: z
+      .object({
+        mode: z.enum(['none', 'bearer', 'api-key', 'oauth']).optional(),
+        headerName: z.string().min(1).max(128).optional(),
+        oauth: McpOAuthPublicClientConfig.nullable().optional(),
+      })
+      .strict()
+      .optional(),
+  }),
 })
 
 export const McpServerIdPayload = z.object({ id: McpServerId })
@@ -30,6 +39,12 @@ export const McpCredentialSetPayload = z.object({
 export const McpOAuthCompletePayload = z.object({
   id: McpServerId,
   callbackUrl: z.string().url(),
+  generation: z.string().min(1).max(128),
+})
+
+export const McpOAuthCancelPayload = z.object({
+  id: McpServerId,
+  generation: z.string().min(1).max(128),
 })
 
 export const McpResourceReadPayload = z.object({
@@ -50,3 +65,4 @@ export const McpMarketplaceImportPayload = z.object({
 
 export type McpServerCreatePayload = z.infer<typeof McpServerCreatePayload>
 export type McpServerUpdatePayload = z.infer<typeof McpServerUpdatePayload>
+export type McpOAuthCancelPayload = z.infer<typeof McpOAuthCancelPayload>

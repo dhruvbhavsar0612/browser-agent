@@ -38,6 +38,7 @@ export const MessageType = z.enum([
   'mcp.credential.delete',
   'mcp.oauth.connect',
   'mcp.oauth.complete',
+  'mcp.oauth.cancel',
   'mcp.oauth.disconnect',
   'mcp.resources.list',
   'mcp.resources.read',

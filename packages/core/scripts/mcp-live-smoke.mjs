@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 
 const url = process.env.MCP_TEST_URL
@@ -26,6 +29,16 @@ let client
 let transport
 let transportName
 
+function shouldFallBackToSse(error) {
+  // Keep this supplemental Node check aligned with the MV3 registry. A retry
+  // is appropriate only when Streamable HTTP negotiation is explicitly
+  // rejected; auth, CORS, and opaque fetch failures must retain their cause.
+  return (
+    error instanceof StreamableHTTPError &&
+    [404, 405, 406, 415, 501].includes(error.code ?? -1)
+  )
+}
+
 try {
   client = new Client({ name: 'browser-agent-live-smoke', version: '0.0.1' })
   transport = new StreamableHTTPClientTransport(parsed, { requestInit })
@@ -33,6 +46,9 @@ try {
   transportName = 'streamable-http'
 } catch (streamableError) {
   await transport?.close().catch(() => undefined)
+  if (!shouldFallBackToSse(streamableError)) {
+    throw new Error(`Streamable HTTP failed without an eligible SSE fallback: ${String(streamableError)}`)
+  }
   client = new Client({ name: 'browser-agent-live-smoke', version: '0.0.1' })
   transport = new SSEClientTransport(parsed, { requestInit })
   try {
